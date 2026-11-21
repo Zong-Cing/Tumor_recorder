@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
                 AppNavHost(
                     container = container,
                     initialRecordId = openRecordId,
+                    onConsumeInitialRecordId = { openRecordId = null },
                     initialDialNumber = incomingDialNumber,
                     onConsumeInitialDialNumber = { incomingDialNumber = null },
                     hasRequiredPermissions = hasRequiredPermissions,

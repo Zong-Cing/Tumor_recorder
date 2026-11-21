@@ -48,7 +48,7 @@ data class ActiveCallUiState(
  */
 object CallManager {
 
-    private const val TAG = "CallManager"
+    private const val TAG = "TumorRecorder_CallMgr"
     private const val PENDING_OUTGOING_TTL_MS = 20_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)

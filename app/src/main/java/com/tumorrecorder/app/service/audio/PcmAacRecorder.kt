@@ -31,7 +31,8 @@ data class PcmRecorderStopSummary(
     val totalFrames: Int,
     val nonZeroFrames: Int,
     val maxRawPeak: Float,
-    val avgAppliedGainDb: Float
+    val avgAppliedGainDb: Float,
+    val failureReason: String? = null
 )
 
 /**
@@ -54,6 +55,9 @@ class PcmAacRecorder(
     private var workerThread: Thread? = null
 
     @Volatile
+    private var activeAudioRecord: AudioRecord? = null
+
+    @Volatile
     private var activeSource: RecordingAudioSource = preferredSource
 
     @Volatile
@@ -63,7 +67,8 @@ class PcmAacRecorder(
         totalFrames = 0,
         nonZeroFrames = 0,
         maxRawPeak = 0f,
-        avgAppliedGainDb = 0f
+        avgAppliedGainDb = 0f,
+        failureReason = "錄音執行緒未正常結束"
     )
 
     fun start(): RecordingAudioSource? {
@@ -92,6 +97,7 @@ class PcmAacRecorder(
         val opened = openFirstWorkingAudioRecord(orderedCandidates, sampleRate) ?: return null
         val (initialRecord, initialSource, initialEffects) = opened
         activeSource = initialSource
+        activeAudioRecord = initialRecord
 
         val codec: MediaCodec
         val muxer: MediaMuxer
@@ -100,6 +106,7 @@ class PcmAacRecorder(
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize AAC MediaCodec/MediaMuxer", e)
+            activeAudioRecord = null
             releaseAudioRecord(initialRecord, initialEffects)
             return null
         }
@@ -125,6 +132,14 @@ class PcmAacRecorder(
 
     fun stop(): PcmRecorderStopSummary {
         isRunning.set(false)
+        // Immediately stop AudioRecord so any blocking read() unblocks even during Samsung call teardown
+        activeAudioRecord?.let { rec ->
+            runCatching {
+                if (rec.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    rec.stop()
+                }
+            }
+        }
         val thread = workerThread
         workerThread = null
         if (thread != null && thread.isAlive) {
@@ -158,6 +173,7 @@ class PcmAacRecorder(
         var writtenPackets = 0
         var lastMuxerPtsUs = -1L
         var totalSamplesEncoded = 0L
+        var loopError: String? = null
 
         var totalFrames = 0
         var nonZeroFrames = 0
@@ -199,6 +215,7 @@ class PcmAacRecorder(
                         val fallback = tryOpenAudioRecord(RecordingAudioSource.VOICE_RECOGNITION, sampleRate)
                         if (fallback != null) {
                             record = fallback.first
+                            activeAudioRecord = record
                             currentSource = RecordingAudioSource.VOICE_RECOGNITION
                             effects = fallback.second
                             activeSource = currentSource
@@ -212,6 +229,7 @@ class PcmAacRecorder(
                             val retry = tryOpenAudioRecord(currentSource, sampleRate)
                             if (retry != null) {
                                 record = retry.first
+                                activeAudioRecord = record
                                 effects = retry.second
                             } else {
                                 break
@@ -294,16 +312,35 @@ class PcmAacRecorder(
 
             // Signal End-Of-Stream to MediaCodec and flush final AAC frames
             runCatching {
-                val inputIndex = codec.dequeueInputBuffer(50_000L)
-                if (inputIndex >= 0) {
-                    val eosPtsUs = (totalSamplesEncoded * 1_000_000L) / sampleRate
-                    codec.queueInputBuffer(
-                        inputIndex,
-                        0,
-                        0,
-                        eosPtsUs,
-                        MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                var eosQueued = false
+                for (attempt in 0 until 8) {
+                    val preDrain = drainEncoder(
+                        codec = codec,
+                        muxer = muxer,
+                        bufferInfo = bufferInfo,
+                        muxerTrackIndex = muxerTrackIndex,
+                        muxerStarted = muxerStarted,
+                        lastMuxerPtsUs = lastMuxerPtsUs,
+                        endOfStream = false
                     )
+                    muxerTrackIndex = preDrain.trackIndex
+                    muxerStarted = preDrain.muxerStarted
+                    lastMuxerPtsUs = preDrain.lastPtsUs
+                    writtenPackets += preDrain.packetsWritten
+
+                    val inputIndex = codec.dequeueInputBuffer(30_000L)
+                    if (inputIndex >= 0) {
+                        val eosPtsUs = (totalSamplesEncoded * 1_000_000L) / sampleRate
+                        codec.queueInputBuffer(
+                            inputIndex,
+                            0,
+                            0,
+                            eosPtsUs,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                        )
+                        eosQueued = true
+                        break
+                    }
                 }
                 val drainResult = drainEncoder(
                     codec = codec,
@@ -312,7 +349,7 @@ class PcmAacRecorder(
                     muxerTrackIndex = muxerTrackIndex,
                     muxerStarted = muxerStarted,
                     lastMuxerPtsUs = lastMuxerPtsUs,
-                    endOfStream = true
+                    endOfStream = eosQueued
                 )
                 muxerTrackIndex = drainResult.trackIndex
                 muxerStarted = drainResult.muxerStarted
@@ -322,33 +359,41 @@ class PcmAacRecorder(
                 Log.w(TAG, "Error flushing AAC encoder EOS", e)
             }
         } catch (e: Exception) {
+            loopError = e.message ?: e::class.java.simpleName
             Log.e(TAG, "Unexpected error in PCM-AAC recording loop", e)
         } finally {
+            activeAudioRecord = null
             releaseAudioRecord(record, effects)
             runCatching { codec.stop() }
             runCatching { codec.release() }
             if (muxerStarted) {
                 runCatching { muxer.stop() }.onFailure {
+                    loopError = loopError ?: "MediaMuxer.stop: ${it.message}"
                     Log.w(TAG, "MediaMuxer.stop failed", it)
                 }
             }
             runCatching { muxer.release() }
 
             val avgGain = if (gainDbCount > 0) (gainDbSum / gainDbCount).toFloat() else 0f
-            val fileOk = muxerStarted && writtenPackets > 0 && outputFile.exists() && outputFile.length() > 1024L
+            val fileBytes = if (outputFile.exists()) outputFile.length() else 0L
+            val fileOk = muxerStarted && writtenPackets > 0 && fileBytes > 1024L
+            val reason = if (fileOk) null else {
+                loopError ?: "muxerStarted=$muxerStarted packets=$writtenPackets bytes=$fileBytes frames=$totalFrames"
+            }
             stopSummary = PcmRecorderStopSummary(
                 success = fileOk,
                 finalSource = currentSource,
                 totalFrames = totalFrames,
                 nonZeroFrames = nonZeroFrames,
                 maxRawPeak = maxRawPeak,
-                avgAppliedGainDb = avgGain
+                avgAppliedGainDb = avgGain,
+                failureReason = reason
             )
             Log.i(
                 TAG,
                 "Finished PcmAacRecorder: ok=$fileOk source=${currentSource.name} " +
                     "frames=$totalFrames nonZero=$nonZeroFrames rawPeak=${"%.3f".format(maxRawPeak)} " +
-                    "avgGain=${"%.1f".format(avgGain)}dB fileBytes=${outputFile.length()}"
+                    "avgGain=${"%.1f".format(avgGain)}dB fileBytes=$fileBytes reason=$reason"
             )
         }
     }
@@ -549,7 +594,7 @@ class PcmAacRecorder(
     }
 
     companion object {
-        private const val TAG = "PcmAacRecorder"
+        private const val TAG = "TumorRecorder_PCM"
         private const val CODEC_TIMEOUT_US = 10_000L
         private const val SILENCE_FALLBACK_FRAMES = 60 // ~1.2 seconds of all-zero PCM
         private const val SILENCE_WARNING_FRAMES = 125 // ~2.5 seconds of all-zero PCM

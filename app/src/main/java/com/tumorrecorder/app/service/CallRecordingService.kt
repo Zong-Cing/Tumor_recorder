@@ -65,7 +65,9 @@ class CallRecordingService : Service() {
     private var mediaRecorder: MediaRecorder? = null
     private var outputFile: File? = null
     private var startedAtMillis: Long = 0L
+    @Volatile
     private var activeRecordId: Long? = null
+    private var insertRecordJob: Job? = null
     private var activePhoneNumber: String = ""
     private var activeDirection: CallDirection = CallDirection.MANUAL
     private var activeAudioSourceLabel: String = ""
@@ -197,7 +199,7 @@ class CallRecordingService : Service() {
             errorMessage = null
         )
 
-        serviceScope.launch(Dispatchers.IO) {
+        insertRecordJob = serviceScope.launch(Dispatchers.IO) {
             val id = app.container.callRecordRepository.insertRecord(
                 CallRecordEntity(
                     phoneNumber = phoneNumber,
@@ -211,6 +213,7 @@ class CallRecordingService : Service() {
             )
             activeRecordId = id
             _recordingState.value = _recordingState.value.copy(currentRecordId = id)
+            Log.i(TAG, "Inserted placeholder record id=$id path=${file.absolutePath}")
         }
 
         timerJob?.cancel()
@@ -363,11 +366,13 @@ class CallRecordingService : Service() {
 
         val elapsed = ((System.currentTimeMillis() - startedAtMillis) / 1000L).coerceAtLeast(1L)
         val file = outputFile
-        val recordId = activeRecordId
+        val pendingInsertJob = insertRecordJob
+        val initialRecordId = activeRecordId
         val phoneNumber = activePhoneNumber
         val direction = activeDirection
         val startMillis = startedAtMillis
         outputFile = null
+        insertRecordJob = null
         activeRecordId = null
 
         val activePcmRecorder = pcmAacRecorder
@@ -388,16 +393,23 @@ class CallRecordingService : Service() {
         val (quickPatient, quickId, quickCm) = CallManager.snapshotQuickNotes()
 
         serviceScope.launch(Dispatchers.IO) {
+            // Ensure placeholder insert finished before reading/updating recordId
+            runCatching { pendingInsertJob?.join() }
+            val recordId = initialRecordId ?: activeRecordId
+
             var stopSucceeded = false
+            var failureReason: String? = null
 
             if (activePcmRecorder != null) {
                 val summary = runCatching { activePcmRecorder.stop() }.getOrNull()
                 stopSucceeded = summary?.success == true
+                failureReason = summary?.failureReason
             } else if (activeMediaRecorder != null) {
                 stopSucceeded = runCatching {
                     activeMediaRecorder.stop()
                     true
                 }.getOrElse { e ->
+                    failureReason = e.message ?: e::class.java.simpleName
                     Log.w(TAG, "MediaRecorder stop error", e)
                     false
                 }
@@ -406,8 +418,13 @@ class CallRecordingService : Service() {
             }
 
             val repo = app.container.callRecordRepository
+            val fileBytes = if (file != null && file.exists()) file.length() else 0L
+            Log.i(
+                TAG,
+                "finishRecording: stopSucceeded=$stopSucceeded recordId=$recordId bytes=$fileBytes elapsed=${elapsed}s reason=$failureReason"
+            )
 
-            if (stopSucceeded && file != null && file.exists() && file.length() > 1024L) {
+            if (stopSucceeded && file != null && file.exists() && fileBytes > 1024L) {
                 val finalId = if (recordId != null) {
                     val existing = repo.getRecord(recordId)
                     if (existing != null) {
@@ -415,6 +432,8 @@ class CallRecordingService : Service() {
                             existing.copy(
                                 phoneNumber = existing.phoneNumber.ifBlank { phoneNumber },
                                 durationSeconds = elapsed,
+                                audioFilePath = file.absolutePath,
+                                audioMimeType = "audio/mp4",
                                 patientName = existing.patientName.ifBlank { quickPatient },
                                 patientIdentifier = existing.patientIdentifier.ifBlank { quickId },
                                 caseManagerName = existing.caseManagerName.ifBlank { quickCm },
@@ -422,8 +441,23 @@ class CallRecordingService : Service() {
                                 errorMessage = null
                             )
                         )
+                        recordId
+                    } else {
+                        repo.insertRecord(
+                            CallRecordEntity(
+                                phoneNumber = phoneNumber,
+                                direction = direction.name,
+                                startedAtMillis = startMillis,
+                                durationSeconds = elapsed,
+                                audioFilePath = file.absolutePath,
+                                audioMimeType = "audio/mp4",
+                                patientName = quickPatient,
+                                patientIdentifier = quickId,
+                                caseManagerName = quickCm,
+                                status = ProcessingStatus.PENDING.name
+                            )
+                        )
                     }
-                    recordId
                 } else {
                     repo.insertRecord(
                         CallRecordEntity(
@@ -441,6 +475,8 @@ class CallRecordingService : Service() {
                     )
                 }
 
+                Log.i(TAG, "Saved call record id=$finalId bytes=$fileBytes autoAnalyze=${settings.autoAnalyzeAfterCall}")
+
                 if (settings.autoAnalyzeAfterCall) {
                     repo.enqueueProcessing(finalId)
                 } else {
@@ -448,11 +484,14 @@ class CallRecordingService : Service() {
                     showPostCallConfirmNotification(finalId, phoneNumber, elapsed)
                 }
             } else {
-                // Recording too short or failed; remove placeholder
+                // Recording too short or failed; remove placeholder and surface diagnostic error
                 if (recordId != null) {
                     repo.getRecord(recordId)?.let { repo.deleteRecord(it) }
                 }
                 file?.let { runCatching { it.delete() } }
+                val msg = "錄音存檔未完成（長度 ${elapsed}s / ${fileBytes} bytes${if (!failureReason.isNullOrBlank()) "：$failureReason" else ""}）"
+                Log.w(TAG, msg)
+                _recordingState.value = RecordingState(isRecording = false, errorMessage = msg)
             }
 
             stopSelfSafely()
@@ -622,7 +661,7 @@ class CallRecordingService : Service() {
     }
 
     companion object {
-        private const val TAG = "CallRecordingService"
+        private const val TAG = "TumorRecorder_Service"
         private const val NOTIFICATION_ID = 1001
         private const val NOTIFICATION_ID_CONFIRM = 1002
 

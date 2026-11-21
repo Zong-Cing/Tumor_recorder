@@ -111,7 +111,8 @@ class InCallActivity : ComponentActivity() {
                     if (callEnded && pendingConfirmId == null) {
                         // If we were recording, give finishRecording() a short window to flush AAC & emit pendingConfirmId
                         delay(if (hadRecordingInThisSession) 1800L else 400L)
-                        if (CallManager.callState.value == null &&
+                        if (!isFinishing &&
+                            CallManager.callState.value == null &&
                             CallRecordingService.pendingConfirmRecordId.value == null
                         ) {
                             finish()
@@ -129,11 +130,11 @@ class InCallActivity : ComponentActivity() {
                                 promptTemplateId = selectedPromptId
                             )
                             CallRecordingService.clearPendingConfirm()
-                            openHomeAndFinish()
+                            openHomeAndFinish(openRecordId = confirmId)
                         },
                         onKeepForLater = {
                             CallRecordingService.clearPendingConfirm()
-                            finish()
+                            openHomeAndFinish(openRecordId = confirmId)
                         },
                         onDiscardRecording = {
                             scope.launch {
@@ -141,7 +142,7 @@ class InCallActivity : ComponentActivity() {
                                     container.callRecordRepository.deleteRecord(it)
                                 }
                                 CallRecordingService.clearPendingConfirm()
-                                finish()
+                                if (!isFinishing) finish()
                             }
                         }
                     )
@@ -167,13 +168,16 @@ class InCallActivity : ComponentActivity() {
         }
     }
 
-    private fun openHomeAndFinish() {
+    private fun openHomeAndFinish(openRecordId: Long? = null) {
         startActivity(
             Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (openRecordId != null && openRecordId > 0L) {
+                    putExtra(MainActivity.EXTRA_OPEN_RECORD_ID, openRecordId)
+                }
             }
         )
-        finish()
+        if (!isFinishing) finish()
     }
 
     @Suppress("DEPRECATION")

@@ -169,7 +169,7 @@ class CallStateReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        private const val TAG = "CallStateReceiver"
+        private const val TAG = "TumorRecorder_Receiver"
         private const val NOTIFICATION_ID_MANUAL_PROMPT = 1099
         private const val STATE_PREFS = "call_state_tracker"
         private const val KEY_LAST_STATE = "last_state"

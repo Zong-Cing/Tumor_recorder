@@ -55,7 +55,7 @@ class CallRecorderAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        private const val TAG = "CallRecorderA11y"
+        private const val TAG = "TumorRecorder_A11y"
 
         @Volatile
         var instance: CallRecorderAccessibilityService? = null

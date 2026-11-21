@@ -18,11 +18,12 @@ import com.tumorrecorder.app.TumorRecorderApp
 import com.tumorrecorder.app.data.local.CallRecordEntity
 import com.tumorrecorder.app.data.remote.EmailFormatter
 import com.tumorrecorder.app.domain.model.ProcessingStatus
+import kotlinx.coroutines.CancellationException
 import java.io.File
 
 /**
  * Reliable background worker that runs:
- *   1. Gemini audio upload + structured oncology transcription & summary
+ *   1. AI audio upload/STT + structured oncology transcription & summary (Gemini or Groq)
  *   2. Persisting structured fields & full transcript to Room DB
  *   3. Automatic Gmail SMTP delivery (if enabled & configured)
  */
@@ -35,7 +36,13 @@ class CallProcessingWorker(
         val recordId = inputData.getLong(KEY_RECORD_ID, -1L)
         val promptTemplateId = inputData.getLong(KEY_PROMPT_TEMPLATE_ID, -1L)
         val forceEmail = inputData.getBoolean(KEY_FORCE_EMAIL, false)
-        if (recordId <= 0L) return Result.failure()
+        Log.i(TAG, "doWork start: recordId=$recordId promptTemplateId=$promptTemplateId forceEmail=$forceEmail")
+
+        if (recordId <= 0L) {
+            Log.e(TAG, "Invalid recordId=$recordId")
+            notifyUser(1L, "無法進行 AI 摘要", "通話紀錄編號無效（recordId=$recordId）。")
+            return Result.failure()
+        }
 
         val app = applicationContext as TumorRecorderApp
         val repo = app.container.callRecordRepository
@@ -45,7 +52,58 @@ class CallProcessingWorker(
         val groqService = app.container.groqService
         val emailService = app.container.emailService
 
-        var record = repo.getRecord(recordId) ?: return Result.failure()
+        var record = repo.getRecord(recordId)
+        if (record == null) {
+            Log.e(TAG, "Record id=$recordId not found in database")
+            notifyUser(recordId, "找不到通話紀錄", "資料庫中找不到此筆錄音（id=$recordId）。")
+            return Result.failure()
+        }
+
+        return try {
+            processRecord(
+                recordId = recordId,
+                promptTemplateId = promptTemplateId,
+                forceEmail = forceEmail,
+                initialRecord = record,
+                repo = repo,
+                promptRepo = promptRepo,
+                settings = settings,
+                geminiService = geminiService,
+                groqService = groqService,
+                emailService = emailService
+            )
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Log.e(TAG, "Uncaught failure while processing record $recordId", t)
+            runCatching {
+                repo.getRecord(recordId)?.let { latest ->
+                    repo.updateRecord(
+                        latest.copy(
+                            status = ProcessingStatus.FAILED.name,
+                            errorMessage = "背景處理發生異常：${t.message ?: t::class.java.simpleName}"
+                        )
+                    )
+                }
+            }
+            notifyUser(recordId, "通話處理異常", t.message ?: t::class.java.simpleName)
+            Result.failure()
+        }
+    }
+
+    private suspend fun processRecord(
+        recordId: Long,
+        promptTemplateId: Long,
+        forceEmail: Boolean,
+        initialRecord: CallRecordEntity,
+        repo: com.tumorrecorder.app.data.repository.CallRecordRepository,
+        promptRepo: com.tumorrecorder.app.data.repository.PromptTemplateRepository,
+        settings: com.tumorrecorder.app.domain.model.AppSettings,
+        geminiService: com.tumorrecorder.app.data.remote.GeminiService,
+        groqService: com.tumorrecorder.app.data.remote.GroqService,
+        emailService: com.tumorrecorder.app.data.remote.EmailService
+    ): Result {
+        var record = initialRecord
 
         if (!settings.isAiConfigured) {
             val missingName = if (settings.aiProvider == com.tumorrecorder.app.domain.model.AiProvider.GROQ) {
@@ -53,6 +111,7 @@ class CallProcessingWorker(
             } else {
                 "Gemini API Key"
             }
+            Log.w(TAG, "AI not configured ($missingName) for recordId=$recordId")
             repo.updateRecord(
                 record.copy(
                     status = ProcessingStatus.FAILED.name,
@@ -64,13 +123,17 @@ class CallProcessingWorker(
         }
 
         val audioFile = File(record.audioFilePath)
-        if (!audioFile.exists() || audioFile.length() == 0L) {
+        val audioLength = if (audioFile.exists()) audioFile.length() else 0L
+        Log.i(TAG, "Loaded recordId=$recordId provider=${settings.aiProvider.name} audio=${audioFile.absolutePath} bytes=$audioLength")
+        if (!audioFile.exists() || audioLength == 0L) {
+            Log.e(TAG, "Audio file missing or empty for recordId=$recordId path=${record.audioFilePath}")
             repo.updateRecord(
                 record.copy(
                     status = ProcessingStatus.FAILED.name,
-                    errorMessage = "找不到錄音檔案，可能已被移除。"
+                    errorMessage = "找不到錄音檔案（${record.audioFilePath}），可能已被移除。"
                 )
             )
+            notifyUser(recordId, "找不到錄音檔案", "該筆通話錄音檔不存在或大小為 0。")
             return Result.failure()
         }
 
@@ -114,7 +177,7 @@ class CallProcessingWorker(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "AI processing failed for record $recordId", e)
+            Log.e(TAG, "AI processing failed for record $recordId: ${e.message}", e)
             repo.updateRecord(
                 record.copy(
                     status = ProcessingStatus.FAILED.name,
@@ -245,7 +308,7 @@ class CallProcessingWorker(
     }
 
     companion object {
-        private const val TAG = "CallProcessingWorker"
+        private const val TAG = "TumorRecorder_Worker"
         const val KEY_RECORD_ID = "record_id"
         const val KEY_PROMPT_TEMPLATE_ID = "prompt_template_id"
         const val KEY_FORCE_EMAIL = "force_email"

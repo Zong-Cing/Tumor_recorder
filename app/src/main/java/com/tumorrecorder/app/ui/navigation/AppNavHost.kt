@@ -33,6 +33,7 @@ private object Routes {
 fun AppNavHost(
     container: AppContainer,
     initialRecordId: Long?,
+    onConsumeInitialRecordId: () -> Unit,
     initialDialNumber: String?,
     onConsumeInitialDialNumber: () -> Unit,
     hasRequiredPermissions: Boolean,
@@ -51,6 +52,7 @@ fun AppNavHost(
             navController.navigate(Routes.detail(initialRecordId)) {
                 launchSingleTop = true
             }
+            onConsumeInitialRecordId()
         }
     }
 

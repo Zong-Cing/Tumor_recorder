@@ -57,8 +57,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tumorrecorder.app.domain.model.AiProvider
 import com.tumorrecorder.app.domain.model.AppSettings
 import com.tumorrecorder.app.domain.model.RecordingAudioSource
+import com.tumorrecorder.app.domain.model.VoiceBoostLevel
 import com.tumorrecorder.app.ui.theme.MedicalTeal
 import com.tumorrecorder.app.ui.theme.MedicalTealLight
 import com.tumorrecorder.app.ui.theme.SuccessGreen
@@ -80,11 +82,13 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val testingGemini by viewModel.testingGemini.collectAsStateWithLifecycle()
+    val testingGroq by viewModel.testingGroq.collectAsStateWithLifecycle()
     val testingEmail by viewModel.testingEmail.collectAsStateWithLifecycle()
     val feedbackMessage by viewModel.feedbackMessage.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showGeminiKey by remember { mutableStateOf(false) }
+    var showGroqKey by remember { mutableStateOf(false) }
     var showSmtpPass by remember { mutableStateOf(false) }
 
     LaunchedEffect(feedbackMessage) {
@@ -205,7 +209,26 @@ fun SettingsScreen(
                     )
                 }
 
-                Text("通話錄音音源（依機型微調）", style = MaterialTheme.typography.titleSmall)
+                Text("遠端小聲自動增強（動態壓縮 DRC + 自動增益 AGC）", style = MaterialTheme.typography.titleSmall)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    VoiceBoostLevel.entries.forEach { level ->
+                        FilterChip(
+                            selected = settings.voiceBoostLevel == level,
+                            onClick = { viewModel.update { it.copy(voiceBoostLevel = level) } },
+                            label = { Text(level.shortLabel) }
+                        )
+                    }
+                }
+                Text(
+                    text = "${settings.voiceBoostLevel.label}：${settings.voiceBoostLevel.description}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MedicalTeal
+                )
+
+                Text("通話錄音音源（建議固定選 VOICE_RECOGNITION）", style = MaterialTheme.typography.titleSmall)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -246,19 +269,27 @@ fun SettingsScreen(
                     )
                 }
                 SettingToggleRow(
-                    title = "通話結束後自動分析（免詢問）",
-                    subtitle = "預設關閉：通話結束會先跳出確認視窗問您要不要分析，確認後才送出 Gemini 與寄信",
-                    checked = settings.autoAnalyzeAfterCall,
+                    title = "錄音通話時自動拉高聽筒音量（推薦）",
+                    subtitle = "開始錄音時暫時將通話聽筒音量調至 90%～100% 以提升麥克風收音，掛斷後自動恢復原本音量",
+                    checked = settings.boostCallVolumeOnRecord,
                     onCheckedChange = { enabled ->
-                        viewModel.update { it.copy(autoAnalyzeAfterCall = enabled) }
+                        viewModel.update { it.copy(boostCallVolumeOnRecord = enabled) }
                     }
                 )
                 SettingToggleRow(
-                    title = "通話接通時自動開啟擴音（選用備案）",
-                    subtitle = "若使用無障礙 + VOICE_RECOGNITION 後對方聲音仍偏小，可開啟此項輔助收音",
+                    title = "通話接通時自動開啟擴音（最清晰雙向錄音）",
+                    subtitle = "若處於私密辦公空間，開啟擴音可讓對方聲音大幅清晰；通話畫面內也可隨時一鍵切換擴音",
                     checked = settings.autoEnableSpeakerOnCall,
                     onCheckedChange = { enabled ->
                         viewModel.update { it.copy(autoEnableSpeakerOnCall = enabled) }
+                    }
+                )
+                SettingToggleRow(
+                    title = "通話結束後自動分析（免詢問）",
+                    subtitle = "預設關閉：通話結束會先跳出確認視窗問您要不要分析，確認後才送出 AI 與寄信",
+                    checked = settings.autoAnalyzeAfterCall,
+                    onCheckedChange = { enabled ->
+                        viewModel.update { it.copy(autoAnalyzeAfterCall = enabled) }
                     }
                 )
                 OutlinedTextField(
@@ -270,58 +301,181 @@ fun SettingsScreen(
                 )
             }
 
-            // Section 3: Google Gemini API
-            SettingsSectionCard(title = "3. Google Gemini AI 語音轉錄與摘要") {
-                OutlinedTextField(
-                    value = settings.geminiApiKey,
-                    onValueChange = { v -> viewModel.update { it.copy(geminiApiKey = v) } },
-                    label = { Text("Gemini API Key") },
-                    placeholder = { Text("AIzaSy...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    visualTransformation = if (showGeminiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { showGeminiKey = !showGeminiKey }) {
-                            Icon(
-                                imageVector = if (showGeminiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = "顯示/隱藏"
-                            )
-                        }
-                    }
-                )
-
-                Text("模型選擇", style = MaterialTheme.typography.labelMedium)
+            // Section 3: AI Speech-to-Text & Summary Provider
+            SettingsSectionCard(title = "3. AI 語音轉錄與摘要引擎") {
+                Text("選擇 AI 服務供應商", style = MaterialTheme.typography.titleSmall)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    listOf(
-                        "gemini-4-hydrogen",
-                        "gemini-4-carbon",
-                        "gemini-4-neon",
-                        "gemini-3.8-flash",
-                        "gemini-3.5-flash-lite"
-                    ).forEach { model ->
+                    AiProvider.entries.forEach { provider ->
                         FilterChip(
-                            selected = settings.geminiModel == model,
-                            onClick = { viewModel.update { it.copy(geminiModel = model) } },
-                            label = { Text(model) }
+                            selected = settings.aiProvider == provider,
+                            onClick = { viewModel.update { it.copy(aiProvider = provider) } },
+                            label = {
+                                Text(
+                                    if (provider == AiProvider.GEMINI) "Google Gemini" else "Groq 免費版"
+                                )
+                            }
                         )
                     }
                 }
-                Text(
-                    text = "推薦：gemini-4-hydrogen（最新主力、大幅降低幻覺、有免費額度）；追求最高複雜醫療推理可選 gemini-4-carbon；極致省錢可選 gemini-3.5-flash-lite。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
 
-                OutlinedTextField(
-                    value = settings.geminiModel,
-                    onValueChange = { v -> viewModel.update { it.copy(geminiModel = v) } },
-                    label = { Text("自訂模型 ID") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                if (settings.aiProvider == AiProvider.GEMINI) {
+                    OutlinedTextField(
+                        value = settings.geminiApiKey,
+                        onValueChange = { v -> viewModel.update { it.copy(geminiApiKey = v) } },
+                        label = { Text("Gemini API Key") },
+                        placeholder = { Text("AIzaSy...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = if (showGeminiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showGeminiKey = !showGeminiKey }) {
+                                Icon(
+                                    imageVector = if (showGeminiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "顯示/隱藏"
+                                )
+                            }
+                        }
+                    )
+
+                    Text("Gemini 模型選擇", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        listOf(
+                            "gemini-4-hydrogen",
+                            "gemini-3.8-flash",
+                            "gemini-3.5-flash-lite",
+                            "gemini-4-carbon",
+                            "gemini-4-neon"
+                        ).forEach { model ->
+                            FilterChip(
+                                selected = settings.geminiModel == model,
+                                onClick = { viewModel.update { it.copy(geminiModel = model) } },
+                                label = { Text(model) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = "若免費層遇到 503 滿載，系統分析時會自動重試並依序降級至 gemini-3.8-flash → gemini-3.5-flash-lite；若仍常滿載可切換上方「Groq 免費版」。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = settings.geminiModel,
+                        onValueChange = { v -> viewModel.update { it.copy(geminiModel = v) } },
+                        label = { Text("自訂 Gemini 模型 ID") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    Button(
+                        onClick = { viewModel.testGeminiConnection() },
+                        enabled = !testingGemini && settings.geminiApiKey.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (testingGemini) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text("測試 Gemini API 連線")
+                    }
+                } else {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MedicalTealLight.copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "Groq 免費版免綁信用卡，每日提供約 8 小時免費 Whisper 語音轉錄 + 大量免費中文摘要額度，極少出現 503 滿載。請至 console.groq.com 免費註冊並建立 API Key。",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = settings.groqApiKey,
+                        onValueChange = { v -> viewModel.update { it.copy(groqApiKey = v) } },
+                        label = { Text("Groq API Key") },
+                        placeholder = { Text("gsk_...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = if (showGroqKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showGroqKey = !showGroqKey }) {
+                                Icon(
+                                    imageVector = if (showGroqKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "顯示/隱藏"
+                                )
+                            }
+                        }
+                    )
+
+                    Text("語音轉錄模型 (Whisper STT)", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        listOf(
+                            "whisper-large-v3-turbo",
+                            "whisper-large-v3"
+                        ).forEach { stt ->
+                            FilterChip(
+                                selected = settings.groqSttModel == stt,
+                                onClick = { viewModel.update { it.copy(groqSttModel = stt) } },
+                                label = { Text(stt) }
+                            )
+                        }
+                    }
+
+                    Text("摘要模型 (LLM)", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        listOf(
+                            "qwen/qwen3.8-27b",
+                            "openai/gpt-oss-120b",
+                            "openai/gpt-oss-20b"
+                        ).forEach { llm ->
+                            FilterChip(
+                                selected = settings.groqLlmModel == llm,
+                                onClick = { viewModel.update { it.copy(groqLlmModel = llm) } },
+                                label = { Text(llm) }
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = settings.groqLlmModel,
+                        onValueChange = { v -> viewModel.update { it.copy(groqLlmModel = v) } },
+                        label = { Text("自訂 Groq 摘要模型 ID") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    Button(
+                        onClick = { viewModel.testGroqConnection() },
+                        enabled = !testingGroq && settings.groqApiKey.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (testingGroq) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text("測試 Groq API 連線")
+                    }
+                }
 
                 OutlinedButton(
                     onClick = onOpenPrompts,
@@ -338,22 +492,6 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2
                 )
-
-                Button(
-                    onClick = { viewModel.testGeminiConnection() },
-                    enabled = !testingGemini && settings.geminiApiKey.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    if (testingGemini) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.White
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text("測試 Gemini API 連線")
-                }
             }
 
             // Section 4: Gmail SMTP Auto Email

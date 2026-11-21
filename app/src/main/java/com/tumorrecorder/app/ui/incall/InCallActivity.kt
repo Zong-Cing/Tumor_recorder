@@ -109,8 +109,8 @@ class InCallActivity : ComponentActivity() {
                 LaunchedEffect(callState, pendingConfirmId, hadRecordingInThisSession) {
                     val callEnded = callState == null || callState?.state == Call.STATE_DISCONNECTED
                     if (callEnded && pendingConfirmId == null) {
-                        // If we were recording, give finishRecording() a short window to finalize the file & emit pendingConfirmId
-                        delay(if (hadRecordingInThisSession) 1200L else 400L)
+                        // If we were recording, give finishRecording() a short window to flush AAC & emit pendingConfirmId
+                        delay(if (hadRecordingInThisSession) 1800L else 400L)
                         if (CallManager.callState.value == null &&
                             CallRecordingService.pendingConfirmRecordId.value == null
                         ) {
@@ -291,6 +291,68 @@ private fun InCallScreenContent(
                             style = MaterialTheme.typography.bodySmall,
                             color = recColor
                         )
+                    }
+
+                    if (recordingState.isRecording) {
+                        val levelFraction = recordingState.inputLevel.coerceIn(0f, 1f)
+                        val gainInt = recordingState.appliedGainDb.toInt()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${recordingState.activeAudioSourceLabel.substringBefore(" ")}・${recordingState.boostLabel}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF99F6E4)
+                                )
+                                Text(
+                                    text = if (gainInt > 0) "即時增益 +${gainInt} dB" else "即時收音中",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFE2E8F0)
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Color.White.copy(alpha = 0.15f))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(levelFraction)
+                                        .height(5.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(
+                                            if (recordingState.isSilencedWarning) Color(0xFFF59E0B) else Color(0xFF34D399)
+                                        )
+                                )
+                            }
+                            recordingState.audioNotice?.let { notice ->
+                                Text(
+                                    text = notice,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFFDE68A)
+                                )
+                            }
+                            if (recordingState.isSilencedWarning) {
+                                Text(
+                                    text = "偵測目前未收到聲音：請確認「無障礙錄音服務」已開啟，或點下方「擴音」輔助收音",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFFBBF24)
+                                )
+                            }
+                        }
                     }
                 }
             }

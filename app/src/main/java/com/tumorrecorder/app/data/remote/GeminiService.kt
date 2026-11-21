@@ -183,14 +183,20 @@ class GeminiService(
         }
     }
 
-    private fun generateStructuredSummary(
+    private suspend fun generateStructuredSummary(
         fileUri: String,
         mimeType: String,
         prompt: String,
         model: String,
         apiKey: String
     ): OncologySummaryResult {
-        val targetModel = model.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
+        val primaryModel = model.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
+        val candidateModels = listOf(
+            primaryModel,
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite"
+        ).distinct()
+
         val payload = buildJsonObject {
             put("contents", buildJsonArray {
                 add(buildJsonObject {
@@ -212,19 +218,41 @@ class GeminiService(
                 put("responseSchema", buildResponseSchema())
             })
         }
+        val payloadString = payload.toString()
 
-        val request = Request.Builder()
-            .url("$BASE_URL/v1beta/models/$targetModel:generateContent?key=$apiKey")
-            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        var lastError: IOException? = null
+        for ((modelIdx, targetModel) in candidateModels.withIndex()) {
+            val attemptsForModel = if (modelIdx == 0) 2 else 1
+            repeat(attemptsForModel) { attempt ->
+                val request = Request.Builder()
+                    .url("$BASE_URL/v1beta/models/$targetModel:generateContent?key=$apiKey")
+                    .post(payloadString.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
 
-        client.newCall(request).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw IOException("Gemini 摘要產生失敗 (${response.code}): ${extractApiError(raw)}")
+                client.newCall(request).execute().use { response ->
+                    val raw = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        return GeminiResponseParser.parseSummaryResponse(raw)
+                    }
+                    val errMsg = extractApiError(raw)
+                    lastError = IOException("Gemini ($targetModel) 錯誤 (${response.code}): $errMsg")
+
+                    // Retry or fall back only on transient overload / quota / unavailable errors
+                    val isRetryable = response.code == 503 || response.code == 429 || response.code == 500
+                    if (!isRetryable) {
+                        throw lastError!!
+                    }
+                    if (attempt < attemptsForModel - 1) {
+                        delay(3000L * (attempt + 1))
+                    }
+                }
             }
-            return GeminiResponseParser.parseSummaryResponse(raw)
+            // Brief pause before trying the next fallback model
+            if (modelIdx < candidateModels.lastIndex) {
+                delay(1000L)
+            }
         }
+        throw lastError ?: IOException("Gemini 摘要產生失敗（伺服器滿載 503），建議至設定頁改選 gemini-3.5-flash-lite 或 Groq 免費版。")
     }
 
     private fun deleteUploadedFile(fileName: String, apiKey: String) {

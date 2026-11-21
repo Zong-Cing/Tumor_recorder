@@ -25,6 +25,9 @@ import com.tumorrecorder.app.data.remote.EmailFormatter
 import com.tumorrecorder.app.domain.model.CallDirection
 import com.tumorrecorder.app.domain.model.ProcessingStatus
 import com.tumorrecorder.app.domain.model.RecordingAudioSource
+import com.tumorrecorder.app.domain.model.VoiceBoostLevel
+import com.tumorrecorder.app.service.audio.PcmAacRecorder
+import com.tumorrecorder.app.service.audio.PcmAacRecorder.Companion.toAndroidAudioSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.roundToInt
 
 data class RecordingState(
     val isRecording: Boolean = false,
@@ -44,6 +48,11 @@ data class RecordingState(
     val direction: CallDirection = CallDirection.MANUAL,
     val speakerEnabled: Boolean = false,
     val activeAudioSourceLabel: String = "",
+    val boostLabel: String = "",
+    val inputLevel: Float = 0f,
+    val appliedGainDb: Float = 0f,
+    val isSilencedWarning: Boolean = false,
+    val audioNotice: String? = null,
     val currentRecordId: Long? = null,
     val errorMessage: String? = null
 )
@@ -52,6 +61,7 @@ class CallRecordingService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    private var pcmAacRecorder: PcmAacRecorder? = null
     private var mediaRecorder: MediaRecorder? = null
     private var outputFile: File? = null
     private var startedAtMillis: Long = 0L
@@ -61,6 +71,7 @@ class CallRecordingService : Service() {
     private var activeAudioSourceLabel: String = ""
     private var timerJob: Job? = null
     private var speakerToggledByService: Boolean = false
+    private var savedVoiceCallVolume: Int? = null
     @Volatile
     private var isActivelyRecording: Boolean = false
 
@@ -129,16 +140,40 @@ class CallRecordingService : Service() {
 
         startForegroundSafely(buildRecordingNotification(0L, false))
 
+        if (fromPhoneCall && settings.boostCallVolumeOnRecord) {
+            boostVoiceCallVolume()
+        }
+
         if (fromPhoneCall && settings.autoEnableSpeakerOnCall) {
             setSpeakerphone(true)
         }
 
-        val usedSource = startMediaRecorder(
+        val a11yTag = if (CallRecorderAccessibilityService.isServiceEnabled(this)) "無障礙已啟用" else "無障礙未啟用"
+        val boostLevel = settings.voiceBoostLevel
+
+        // Primary path: AudioRecord + disabled software AEC/NS + lookahead DRC/AGC + AAC MediaCodec
+        var usedSource: RecordingAudioSource? = startPcmAacRecorder(
             file = file,
             preferredSource = settings.audioSource,
-            fromPhoneCall = fromPhoneCall
+            boostLevel = boostLevel,
+            fromPhoneCall = fromPhoneCall,
+            a11yTag = a11yTag
         )
+        var engineTag = if (boostLevel == VoiceBoostLevel.OFF) "PCM-AAC" else "遠端增強 ${boostLevel.shortLabel}"
+
+        // Fallback path: standard MediaRecorder if AudioRecord/MediaCodec fails on this device
         if (usedSource == null) {
+            Log.w(TAG, "PcmAacRecorder unavailable; falling back to MediaRecorder")
+            usedSource = startMediaRecorder(
+                file = file,
+                preferredSource = settings.audioSource,
+                fromPhoneCall = fromPhoneCall
+            )
+            engineTag = "MediaRecorder 備援"
+        }
+
+        if (usedSource == null) {
+            restoreVoiceCallVolume()
             outputFile = null
             _recordingState.value = RecordingState(
                 isRecording = false,
@@ -149,7 +184,6 @@ class CallRecordingService : Service() {
         }
 
         isActivelyRecording = true
-        val a11yTag = if (CallRecorderAccessibilityService.isServiceEnabled(this)) "無障礙已啟用" else "無障礙未啟用"
         activeAudioSourceLabel = "${usedSource.name} ($a11yTag)"
         val currentSpeaker = isSpeakerphoneCurrentlyOn()
         _recordingState.value = RecordingState(
@@ -159,6 +193,7 @@ class CallRecordingService : Service() {
             direction = direction,
             speakerEnabled = currentSpeaker,
             activeAudioSourceLabel = activeAudioSourceLabel,
+            boostLabel = engineTag,
             errorMessage = null
         )
 
@@ -189,6 +224,47 @@ class CallRecordingService : Service() {
         }
     }
 
+    private fun startPcmAacRecorder(
+        file: File,
+        preferredSource: RecordingAudioSource,
+        boostLevel: VoiceBoostLevel,
+        fromPhoneCall: Boolean,
+        a11yTag: String
+    ): RecordingAudioSource? {
+        val recorder = PcmAacRecorder(
+            outputFile = file,
+            preferredSource = preferredSource,
+            boostLevel = boostLevel,
+            fromPhoneCall = fromPhoneCall,
+            onSourceSwitched = { newSource, notice ->
+                val newLabel = "${newSource.name} ($a11yTag)"
+                activeAudioSourceLabel = newLabel
+                val current = _recordingState.value
+                if (current.isRecording) {
+                    _recordingState.value = current.copy(
+                        activeAudioSourceLabel = newLabel,
+                        audioNotice = notice
+                    )
+                }
+            },
+            onTelemetry = { telemetry ->
+                val current = _recordingState.value
+                if (current.isRecording) {
+                    _recordingState.value = current.copy(
+                        inputLevel = telemetry.inputLevelNormalized,
+                        appliedGainDb = telemetry.appliedGainDb,
+                        isSilencedWarning = telemetry.isSilencedWarning
+                    )
+                }
+            }
+        )
+        val startedSource = recorder.start()
+        if (startedSource != null) {
+            pcmAacRecorder = recorder
+        }
+        return startedSource
+    }
+
     private fun startMediaRecorder(
         file: File,
         preferredSource: RecordingAudioSource,
@@ -210,7 +286,7 @@ class CallRecordingService : Service() {
         }
 
         for (candidate in orderedCandidates) {
-            val androidSource = candidate.toMediaRecorderSource()
+            val androidSource = candidate.toAndroidAudioSource()
             val recorder = createMediaRecorder()
             try {
                 recorder.setAudioSource(androidSource)
@@ -234,19 +310,44 @@ class CallRecordingService : Service() {
         return null
     }
 
-    private fun RecordingAudioSource.toMediaRecorderSource(): Int = when (this) {
-        RecordingAudioSource.VOICE_RECOGNITION -> MediaRecorder.AudioSource.VOICE_RECOGNITION
-        RecordingAudioSource.VOICE_COMMUNICATION -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
-        RecordingAudioSource.MIC -> MediaRecorder.AudioSource.MIC
-        RecordingAudioSource.UNPROCESSED -> MediaRecorder.AudioSource.UNPROCESSED
-    }
-
     @Suppress("DEPRECATION")
     private fun createMediaRecorder(): MediaRecorder {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(this)
         } else {
             MediaRecorder()
+        }
+    }
+
+    private fun boostVoiceCallVolume() {
+        val audioManager = getSystemService(AudioManager::class.java) ?: return
+        runCatching {
+            val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+            val targetVol = if (maxVol <= 5) {
+                maxVol
+            } else {
+                (maxVol * 0.9f).roundToInt().coerceIn(maxVol - 1, maxVol)
+            }
+            if (currentVol < targetVol) {
+                savedVoiceCallVolume = currentVol
+                audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, targetVol, 0)
+                Log.i(TAG, "Boosted STREAM_VOICE_CALL volume $currentVol -> $targetVol (max=$maxVol)")
+            }
+        }.onFailure {
+            Log.w(TAG, "Unable to boost call earpiece volume", it)
+        }
+    }
+
+    private fun restoreVoiceCallVolume() {
+        val prev = savedVoiceCallVolume ?: return
+        savedVoiceCallVolume = null
+        val audioManager = getSystemService(AudioManager::class.java) ?: return
+        runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, prev, 0)
+            Log.i(TAG, "Restored STREAM_VOICE_CALL volume to $prev")
+        }.onFailure {
+            Log.w(TAG, "Unable to restore call earpiece volume", it)
         }
     }
 
@@ -269,34 +370,41 @@ class CallRecordingService : Service() {
         outputFile = null
         activeRecordId = null
 
-        val recorder = mediaRecorder
+        val activePcmRecorder = pcmAacRecorder
+        pcmAacRecorder = null
+        val activeMediaRecorder = mediaRecorder
         mediaRecorder = null
-        var stopSucceeded = false
-        if (recorder != null) {
-            stopSucceeded = runCatching {
-                recorder.stop()
-                true
-            }.getOrElse { e ->
-                Log.w(TAG, "MediaRecorder stop error", e)
-                false
-            }
-            runCatching { recorder.reset() }
-            runCatching { recorder.release() }
-        }
 
         if (speakerToggledByService) {
             setSpeakerphone(false)
             speakerToggledByService = false
         }
+        restoreVoiceCallVolume()
 
         _recordingState.value = RecordingState(isRecording = false)
 
         val app = application as TumorRecorderApp
         val settings = app.container.settingsRepository.currentSettings()
-
         val (quickPatient, quickId, quickCm) = CallManager.snapshotQuickNotes()
 
         serviceScope.launch(Dispatchers.IO) {
+            var stopSucceeded = false
+
+            if (activePcmRecorder != null) {
+                val summary = runCatching { activePcmRecorder.stop() }.getOrNull()
+                stopSucceeded = summary?.success == true
+            } else if (activeMediaRecorder != null) {
+                stopSucceeded = runCatching {
+                    activeMediaRecorder.stop()
+                    true
+                }.getOrElse { e ->
+                    Log.w(TAG, "MediaRecorder stop error", e)
+                    false
+                }
+                runCatching { activeMediaRecorder.reset() }
+                runCatching { activeMediaRecorder.release() }
+            }
+
             val repo = app.container.callRecordRepository
 
             if (stopSucceeded && file != null && file.exists() && file.length() > 1024L) {
@@ -393,6 +501,10 @@ class CallRecordingService : Service() {
 
     @Suppress("DEPRECATION")
     private fun setSpeakerphone(enabled: Boolean) {
+        if (CallManager.setSpeakerEnabled(enabled)) {
+            if (enabled) speakerToggledByService = true
+            return
+        }
         val audioManager = getSystemService(AudioManager::class.java) ?: return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -421,6 +533,7 @@ class CallRecordingService : Service() {
 
     @Suppress("DEPRECATION")
     private fun isSpeakerphoneCurrentlyOn(): Boolean {
+        CallManager.callState.value?.let { return it.isSpeakerOn }
         val audioManager = getSystemService(AudioManager::class.java) ?: return false
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.communicationDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
@@ -478,7 +591,7 @@ class CallRecordingService : Service() {
         return NotificationCompat.Builder(this, TumorRecorderApp.CHANNEL_RECORDING)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("腫瘤個管通話錄音中 (${EmailFormatter.formatDuration(elapsedSeconds)})")
-            .setContentText("通話對象：$numberDisplay・結束後將自動 AI 摘要並寄信")
+            .setContentText("通話對象：$numberDisplay・結束後將詢問是否分析")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(openAppIntent)
@@ -494,11 +607,16 @@ class CallRecordingService : Service() {
 
     override fun onDestroy() {
         timerJob?.cancel()
+        pcmAacRecorder?.let {
+            runCatching { it.stop() }
+        }
+        pcmAacRecorder = null
         mediaRecorder?.let {
             runCatching { it.stop() }
             runCatching { it.release() }
         }
         mediaRecorder = null
+        restoreVoiceCallVolume()
         serviceScope.cancel()
         super.onDestroy()
     }

@@ -185,13 +185,18 @@ object CallManager {
 
     @Suppress("DEPRECATION")
     fun toggleSpeaker() {
-        val service = inCallService ?: return
         val current = _callState.value ?: return
-        val next = !current.isSpeakerOn
+        setSpeakerEnabled(!current.isSpeakerOn)
+    }
+
+    @Suppress("DEPRECATION")
+    fun setSpeakerEnabled(enabled: Boolean): Boolean {
+        val service = inCallService ?: return false
         service.setAudioRoute(
-            if (next) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_WIRED_OR_EARPIECE
+            if (enabled) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_WIRED_OR_EARPIECE
         )
-        _callState.value = current.copy(isSpeakerOn = next)
+        _callState.value = _callState.value?.copy(isSpeakerOn = enabled)
+        return true
     }
 
     fun playDtmf(digit: Char) {

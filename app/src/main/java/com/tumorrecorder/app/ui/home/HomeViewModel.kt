@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -36,6 +37,16 @@ class HomeViewModel(
 
     val settings: StateFlow<AppSettings> = container.settingsRepository.settings
 
+    val pendingConfirmRecord: StateFlow<CallRecordEntity?> = CallRecordingService.pendingConfirmRecordId
+        .flatMapLatest { id ->
+            if (id != null && id > 0L) container.callRecordRepository.observeRecord(id) else flowOf(null)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
+        )
+
     val records: StateFlow<List<CallRecordEntity>> = _searchQuery
         .flatMapLatest { query -> container.callRecordRepository.searchRecords(query) }
         .stateIn(
@@ -52,21 +63,55 @@ class HomeViewModel(
         _dialNumber.value = value
     }
 
+    fun appendDialDigit(digit: String) {
+        _dialNumber.value += digit
+    }
+
+    fun backspaceDialDigit() {
+        val current = _dialNumber.value
+        if (current.isNotEmpty()) {
+            _dialNumber.value = current.dropLast(1)
+        }
+    }
+
     fun importAudioFile(uri: Uri) {
         viewModelScope.launch {
             runCatching {
                 container.callRecordRepository.importAudioUri(uri)
-            }.onSuccess {
-                _snackbarMessage.value = "已匯入錄音檔，正在排隊進行 AI 逐字稿與摘要分析"
+            }.onSuccess { importedId ->
+                if (!container.settingsRepository.currentSettings().autoAnalyzeAfterCall) {
+                    CallRecordingService.requestConfirmForRecord(importedId)
+                } else {
+                    _snackbarMessage.value = "已匯入錄音檔，正在排隊進行 AI 逐字稿與摘要分析"
+                }
             }.onFailure { e ->
                 _snackbarMessage.value = "匯入音檔失敗：${e.message ?: "請確認檔案格式"}"
             }
         }
     }
 
+    fun confirmAnalyzeNow(recordId: Long) {
+        CallRecordingService.clearPendingConfirm()
+        container.callRecordRepository.enqueueProcessing(recordId)
+        _snackbarMessage.value = "已開始 Gemini AI 轉錄摘要，完成後將依設定自動寄信"
+    }
+
+    fun dismissConfirmKeepRecord() {
+        CallRecordingService.clearPendingConfirm()
+        _snackbarMessage.value = "已保留錄音，您可隨時於列表中點擊「開始分析」"
+    }
+
+    fun discardRecord(record: CallRecordEntity) {
+        viewModelScope.launch {
+            CallRecordingService.clearPendingConfirm()
+            container.callRecordRepository.deleteRecord(record)
+            _snackbarMessage.value = "已刪除該筆錄音"
+        }
+    }
+
     fun retryProcessing(recordId: Long) {
         container.callRecordRepository.enqueueProcessing(recordId)
-        _snackbarMessage.value = "已重新加入 AI 摘要分析佇列"
+        _snackbarMessage.value = "已加入 AI 摘要分析佇列"
     }
 
     fun clearSnackbar() {

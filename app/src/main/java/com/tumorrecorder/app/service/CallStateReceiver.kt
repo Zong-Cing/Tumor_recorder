@@ -27,7 +27,10 @@ class CallStateReceiver : BroadcastReceiver() {
 
         val app = context.applicationContext as? TumorRecorderApp ?: return
         val settings = app.container.settingsRepository.currentSettings()
-        if (!settings.autoRecordCalls) return
+
+        // When TumorInCallService (Default Dialer mode) is managing the active call,
+        // let CallManager exclusively control recording so private calls are never recorded.
+        if (CallManager.isManagedByInCallService) return
 
         val hasAudioPermission = ContextCompat.checkSelfPermission(
             context,
@@ -78,6 +81,13 @@ class CallStateReceiver : BroadcastReceiver() {
                 prefs.edit()
                     .putString(KEY_LAST_STATE, stateStr)
                     .apply()
+
+                val launchedFromThisApp = direction == CallDirection.OUTGOING &&
+                    CallManager.consumePendingAppOutgoingRecord()
+                val shouldAutoRecord = launchedFromThisApp ||
+                    (!settings.onlyAnalyzeAppCalls && settings.autoRecordCalls)
+
+                if (!shouldAutoRecord) return
 
                 if (!CallRecordingService.recordingState.value.isRecording) {
                     val launchContext = CallRecorderAccessibilityService.instance ?: context

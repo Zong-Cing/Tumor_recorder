@@ -42,14 +42,25 @@ class TumorRecorderApp : Application() {
                 description = "通話 AI 摘要完成、寄信成功或失敗通知"
             }
 
+            val incomingCallChannel = NotificationChannel(
+                CHANNEL_INCOMING_CALL,
+                "來電通話通知",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "作為預設電話 App 時顯示全螢幕來電接聽畫面"
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            }
+
             nm.createNotificationChannel(recordingChannel)
             nm.createNotificationChannel(statusChannel)
+            nm.createNotificationChannel(incomingCallChannel)
         }
     }
 
     companion object {
         const val CHANNEL_RECORDING = "tumor_recorder_recording"
         const val CHANNEL_STATUS = "tumor_recorder_status"
+        const val CHANNEL_INCOMING_CALL = "tumor_recorder_incoming_call"
     }
 }
 

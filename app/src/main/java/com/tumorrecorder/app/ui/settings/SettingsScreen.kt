@@ -71,6 +71,8 @@ import com.tumorrecorder.app.ui.theme.WarningAmberContainer
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     isAccessibilityEnabled: Boolean,
+    isDefaultDialer: Boolean,
+    onRequestDefaultDialer: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit,
     onBack: () -> Unit
@@ -93,7 +95,7 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("設定與無障礙錄音") },
+                title = { Text("設定與預設電話") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -116,14 +118,41 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Section 1: AccessibilityService & Audio Source
-            SettingsSectionCard(title = "1. 無障礙通話錄音服務（AccessibilityService）") {
+            // Section 1: Default Phone App + AccessibilityService
+            SettingsSectionCard(title = "1. 預設電話 App 與無障礙錄音服務") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("無障礙服務狀態", style = MaterialTheme.typography.bodyLarge)
+                    Text("預設電話 App 狀態", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        text = if (isDefaultDialer) "已設為預設電話" else "未設定",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isDefaultDialer) SuccessGreen else WarningAmber,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(if (isDefaultDialer) SuccessGreenContainer else WarningAmberContainer)
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+
+                if (!isDefaultDialer) {
+                    Button(
+                        onClick = onRequestDefaultDialer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("設為系統預設電話 App")
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("無障礙錄音服務狀態", style = MaterialTheme.typography.bodyLarge)
                     Text(
                         text = if (isAccessibilityEnabled) "已啟用" else "尚未啟用",
                         style = MaterialTheme.typography.labelMedium,
@@ -196,13 +225,31 @@ fun SettingsScreen(
             }
 
             // Section 2: Call Recording Behavior
-            SettingsSectionCard(title = "2. 通話監聽與自動化設定") {
+            SettingsSectionCard(title = "2. 通話錄音與分析確認設定") {
                 SettingToggleRow(
-                    title = "來去電自動錄音",
-                    subtitle = "偵測手機接通通話時自動啟動背景錄音，掛斷自動停止",
-                    checked = settings.autoRecordCalls,
+                    title = "僅分析本 App 收發的通話（推薦）",
+                    subtitle = "開啟時不會在背景攔截其他電話 App；只錄製並分析透過本 App 選擇錄音的通話",
+                    checked = settings.onlyAnalyzeAppCalls,
                     onCheckedChange = { enabled ->
-                        viewModel.update { it.copy(autoRecordCalls = enabled) }
+                        viewModel.update { it.copy(onlyAnalyzeAppCalls = enabled) }
+                    }
+                )
+                if (!settings.onlyAnalyzeAppCalls) {
+                    SettingToggleRow(
+                        title = "背景監聽全部系統來去電自動錄音",
+                        subtitle = "未設為預設電話 App 時，於背景自動錄下所有門號通話",
+                        checked = settings.autoRecordCalls,
+                        onCheckedChange = { enabled ->
+                            viewModel.update { it.copy(autoRecordCalls = enabled) }
+                        }
+                    )
+                }
+                SettingToggleRow(
+                    title = "通話結束後自動分析（免詢問）",
+                    subtitle = "預設關閉：通話結束會先跳出確認視窗問您要不要分析，確認後才送出 Gemini 與寄信",
+                    checked = settings.autoAnalyzeAfterCall,
+                    onCheckedChange = { enabled ->
+                        viewModel.update { it.copy(autoAnalyzeAfterCall = enabled) }
                     }
                 )
                 SettingToggleRow(
@@ -211,14 +258,6 @@ fun SettingsScreen(
                     checked = settings.autoEnableSpeakerOnCall,
                     onCheckedChange = { enabled ->
                         viewModel.update { it.copy(autoEnableSpeakerOnCall = enabled) }
-                    }
-                )
-                SettingToggleRow(
-                    title = "錄音結束自動 AI 摘要",
-                    subtitle = "通話掛斷後自動上傳 Gemini 產出病人姓名、病歷號、個管師、摘要與逐字稿",
-                    checked = settings.autoAnalyzeAfterCall,
-                    onCheckedChange = { enabled ->
-                        viewModel.update { it.copy(autoAnalyzeAfterCall = enabled) }
                     }
                 )
                 OutlinedTextField(

@@ -30,9 +30,13 @@ private object Routes {
 fun AppNavHost(
     container: AppContainer,
     initialRecordId: Long?,
+    initialDialNumber: String?,
+    onConsumeInitialDialNumber: () -> Unit,
     hasRequiredPermissions: Boolean,
     isAccessibilityEnabled: Boolean,
+    isDefaultDialer: Boolean,
     onRequestPermissions: () -> Unit,
+    onRequestDefaultDialer: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit
 ) {
@@ -53,11 +57,19 @@ fun AppNavHost(
     ) {
         composable(Routes.HOME) {
             val vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container))
+            LaunchedEffect(initialDialNumber) {
+                if (!initialDialNumber.isNullOrBlank()) {
+                    vm.onDialNumberChanged(initialDialNumber)
+                    onConsumeInitialDialNumber()
+                }
+            }
             HomeScreen(
                 viewModel = vm,
                 hasRequiredPermissions = hasRequiredPermissions,
                 isAccessibilityEnabled = isAccessibilityEnabled,
+                isDefaultDialer = isDefaultDialer,
                 onRequestPermissions = onRequestPermissions,
+                onRequestDefaultDialer = onRequestDefaultDialer,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onOpenAppDetailsSettings = onOpenAppDetailsSettings,
                 onOpenRecord = { id -> navController.navigate(Routes.detail(id)) },
@@ -85,6 +97,8 @@ fun AppNavHost(
             SettingsScreen(
                 viewModel = vm,
                 isAccessibilityEnabled = isAccessibilityEnabled,
+                isDefaultDialer = isDefaultDialer,
+                onRequestDefaultDialer = onRequestDefaultDialer,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onOpenAppDetailsSettings = onOpenAppDetailsSettings,
                 onBack = { navController.popBackStack() }

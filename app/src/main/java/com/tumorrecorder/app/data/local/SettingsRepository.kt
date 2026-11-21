@@ -31,12 +31,13 @@ class SettingsRepository(context: Context) {
 
     private fun loadSettings(): AppSettings {
         return AppSettings(
-            autoRecordCalls = prefs.getBoolean(KEY_AUTO_RECORD, true),
+            onlyAnalyzeAppCalls = prefs.getBoolean(KEY_ONLY_APP_CALLS, true),
+            autoRecordCalls = prefs.getBoolean(KEY_AUTO_RECORD, false),
             autoEnableSpeakerOnCall = prefs.getBoolean(KEY_AUTO_SPEAKER, false),
             audioSource = com.tumorrecorder.app.domain.model.RecordingAudioSource.fromName(
                 prefs.getString(KEY_AUDIO_SOURCE, null)
             ),
-            autoAnalyzeAfterCall = prefs.getBoolean(KEY_AUTO_ANALYZE, true),
+            autoAnalyzeAfterCall = prefs.getBoolean(KEY_AUTO_ANALYZE, false),
             autoSendEmailAfterSummary = prefs.getBoolean(KEY_AUTO_EMAIL, true),
             attachAudioToEmail = prefs.getBoolean(KEY_ATTACH_AUDIO, false),
             deleteAudioAfterEmailSent = prefs.getBoolean(KEY_DELETE_AUDIO_AFTER_EMAIL, false),
@@ -60,6 +61,7 @@ class SettingsRepository(context: Context) {
 
     private fun saveSettings(s: AppSettings) {
         prefs.edit()
+            .putBoolean(KEY_ONLY_APP_CALLS, s.onlyAnalyzeAppCalls)
             .putBoolean(KEY_AUTO_RECORD, s.autoRecordCalls)
             .putBoolean(KEY_AUTO_SPEAKER, s.autoEnableSpeakerOnCall)
             .putString(KEY_AUDIO_SOURCE, s.audioSource.name)
@@ -101,6 +103,7 @@ class SettingsRepository(context: Context) {
         private const val TAG = "SettingsRepository"
         private const val PREFS_NAME = "tumor_recorder_secure_prefs"
 
+        private const val KEY_ONLY_APP_CALLS = "only_analyze_app_calls"
         private const val KEY_AUTO_RECORD = "auto_record_calls"
         private const val KEY_AUTO_SPEAKER = "auto_enable_speaker"
         private const val KEY_AUDIO_SOURCE = "recording_audio_source"

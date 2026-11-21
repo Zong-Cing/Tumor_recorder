@@ -93,12 +93,16 @@ class CallProcessingWorker(
             return Result.failure()
         }
 
-        // Step 2: Persist extracted oncology case manager details
+        // Step 2: Persist extracted oncology case manager details (preserving in-call quick notes if AI returned 未提及)
+        val mergedPatientName = mergeField(summaryResult.patientName, record.patientName)
+        val mergedIdentifier = mergeField(summaryResult.patientIdentifier, record.patientIdentifier)
+        val mergedCaseManager = mergeField(summaryResult.caseManagerName, record.caseManagerName)
+
         record = record.copy(
-            patientName = summaryResult.patientName.ifBlank { "未提及" },
-            patientIdentifier = summaryResult.patientIdentifier.ifBlank { "未提及" },
+            patientName = mergedPatientName,
+            patientIdentifier = mergedIdentifier,
             identifierType = summaryResult.identifierType.ifBlank { "未提及" },
-            caseManagerName = summaryResult.caseManagerName.ifBlank { "未提及" },
+            caseManagerName = mergedCaseManager,
             callerRelation = summaryResult.callerRelation.ifBlank { "未提及" },
             inquiryCategory = summaryResult.inquiryCategory.ifBlank { "一般諮詢" },
             urgencyLevel = summaryResult.urgencyLevel.ifBlank { "一般" },
@@ -195,6 +199,16 @@ class CallProcessingWorker(
 
         val nm = applicationContext.getSystemService(NotificationManager::class.java)
         nm?.notify((2000 + (recordId % 1000)).toInt(), notification)
+    }
+
+    private fun mergeField(aiValue: String, prefilledValue: String): String {
+        val cleanedAi = aiValue.trim()
+        val cleanedPre = prefilledValue.trim()
+        return when {
+            cleanedAi.isNotEmpty() && cleanedAi != "未提及" -> cleanedAi
+            cleanedPre.isNotEmpty() -> cleanedPre
+            else -> "未提及"
+        }
     }
 
     companion object {

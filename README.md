@@ -4,10 +4,10 @@
 
 ## 核心功能
 
-1. **無障礙通話錄音服務（`AccessibilityService`）＋ 通話監聽**
-   - **無障礙服務搭配 `VOICE_RECOGNITION` 音源**：自用側載模式（不上架 Play 商店），於手機「設定 → 無障礙」啟用 `CallRecorderAccessibilityService`（`canRetrieveWindowContent="false"`，不讀取螢幕畫面），即可在 Android 10+ 通話中併發使用 `VOICE_RECOGNITION` 音源錄製 44.1kHz / 96kbps `.m4a` 音檔，避免被系統強制靜音。
-   - **音源彈性切換**：設定頁支援切換 `VOICE_RECOGNITION`（無障礙推薦）／`VOICE_COMMUNICATION`／`MIC`／`UNPROCESSED`，並保留通知列一鍵擴音、手動錄音與匯入音檔作為備案。
-   - **來去電自動偵測**：透過 `CallStateReceiver` 監聽接通／掛斷，自動啟動前景錄音並於通話結束後排程背景 AI 分析。
+1. **預設電話 App（`ROLE_DIALER` / `InCallService`）＋ 無障礙通話錄音**
+   - **專屬接聽／撥號畫面**：設為系統預設電話 App 後，只針對本 App 收發的通話進行管理；來電畫面提供「**接聽並錄音**」與「**僅接聽（私人不錄音）**」，首頁撥號鍵盤提供「**撥號並錄音**」與「**一般撥號**」，並內建分機鍵盤（DTMF）、擴音、靜音與通話中個管速記欄。
+   - **通話結束先詢問是否分析**：掛斷後預設先跳出確認視窗（「開始 AI 摘要並寄信」／「暫不分析，保留錄音」／「直接刪除錄音」），不會未經同意就把私人或誤撥通話送往雲端。
+   - **無障礙服務搭配 `VOICE_RECOGNITION` 音源**：自用側載模式，於手機「設定 → 無障礙」啟用 `CallRecorderAccessibilityService`（`canRetrieveWindowContent="false"`，不讀取螢幕畫面），搭配 `VOICE_RECOGNITION` 音源錄製 44.1kHz / 96kbps `.m4a` 音檔，並可在設定頁切換音源。
 
 2. **Google Gemini AI 腫瘤個管結構化摘要 ＋ 完整逐字稿**
    - 直接透過 **Gemini Files API** 上傳音檔（預設使用最新的 **`gemini-4-hydrogen`**，可於設定頁切換 `gemini-4-carbon` / `gemini-4-neon` / `gemini-3.8-flash` / `gemini-3.5-flash-lite`），以嚴格 JSON Schema 一次擷取：

@@ -28,10 +28,11 @@ enum class RecordingAudioSource(
 }
 
 data class AppSettings(
-    val autoRecordCalls: Boolean = true,
+    val onlyAnalyzeAppCalls: Boolean = true,
+    val autoRecordCalls: Boolean = false,
     val autoEnableSpeakerOnCall: Boolean = false,
     val audioSource: RecordingAudioSource = RecordingAudioSource.VOICE_RECOGNITION,
-    val autoAnalyzeAfterCall: Boolean = true,
+    val autoAnalyzeAfterCall: Boolean = false,
     val autoSendEmailAfterSummary: Boolean = true,
     val attachAudioToEmail: Boolean = false,
     val deleteAudioAfterEmailSent: Boolean = false,

@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Bundle
+import android.telecom.TelecomManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,19 +31,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhoneInTalk
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -57,13 +64,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,6 +84,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tumorrecorder.app.data.local.CallRecordEntity
@@ -80,6 +92,7 @@ import com.tumorrecorder.app.data.remote.EmailFormatter
 import com.tumorrecorder.app.domain.model.AppSettings
 import com.tumorrecorder.app.domain.model.CallDirection
 import com.tumorrecorder.app.domain.model.ProcessingStatus
+import com.tumorrecorder.app.service.CallManager
 import com.tumorrecorder.app.service.CallRecordingService
 import com.tumorrecorder.app.service.RecordingState
 import com.tumorrecorder.app.ui.components.StatusBadge
@@ -98,7 +111,9 @@ fun HomeScreen(
     viewModel: HomeViewModel,
     hasRequiredPermissions: Boolean,
     isAccessibilityEnabled: Boolean,
+    isDefaultDialer: Boolean,
     onRequestPermissions: () -> Unit,
+    onRequestDefaultDialer: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit,
     onOpenRecord: (Long) -> Unit,
@@ -111,6 +126,7 @@ fun HomeScreen(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val dialNumber by viewModel.dialNumber.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
+    val pendingConfirmRecord by viewModel.pendingConfirmRecord.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -138,7 +154,11 @@ fun HomeScreen(
                             style = MaterialTheme.typography.titleLarge
                         )
                         Text(
-                            text = settings.defaultCaseManagerUnit,
+                            text = if (isDefaultDialer) {
+                                "${settings.defaultCaseManagerUnit}・預設電話模式"
+                            } else {
+                                settings.defaultCaseManagerUnit
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                         )
@@ -165,11 +185,17 @@ fun HomeScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (!isDefaultDialer) {
+                item(key = "default_dialer_banner") {
+                    DefaultDialerSetupCard(onRequestDefaultDialer = onRequestDefaultDialer)
+                }
+            }
+
             if (!hasRequiredPermissions) {
                 item(key = "permission_banner") {
                     SetupWarningCard(
-                        title = "尚未授予通話偵測與錄音權限",
-                        message = "請授予麥克風、電話狀態、通話紀錄與通知權限，以便來電／去電時自動錄音並於背景通知。",
+                        title = "尚未授予通話與錄音權限",
+                        message = "請授予麥克風、撥號、電話狀態、通話紀錄與通知權限，以便直接透過本 App 收發電話與錄音。",
                         actionLabel = "立即授權",
                         onAction = onRequestPermissions
                     )
@@ -193,7 +219,7 @@ fun HomeScreen(
                     }.joinToString("、")
                     SetupWarningCard(
                         title = "尚未完成雲端服務設定",
-                        message = "尚未設定：$missing。完成設定後，通話結束將自動產出病患個管摘要、完整逐字稿並寄至指定信箱。",
+                        message = "尚未設定：$missing。完成設定後，確認分析即可產出腫瘤個管摘要、完整逐字稿並寄至指定信箱。",
                         actionLabel = "前往設定",
                         onAction = onOpenSettings
                     )
@@ -205,8 +231,11 @@ fun HomeScreen(
                     recordingState = recordingState,
                     settings = settings,
                     isAccessibilityEnabled = isAccessibilityEnabled,
+                    isDefaultDialer = isDefaultDialer,
                     dialNumber = dialNumber,
                     onDialNumberChange = viewModel::onDialNumberChanged,
+                    onAppendDigit = viewModel::appendDialDigit,
+                    onBackspaceDigit = viewModel::backspaceDialDigit,
                     onStartManualRecord = {
                         if (!hasAudioPermission(context)) {
                             onRequestPermissions()
@@ -225,7 +254,12 @@ fun HomeScreen(
                     onToggleSpeaker = {
                         CallRecordingService.toggleSpeaker(context)
                     },
-                    onDialCall = {
+                    onDialWithRecord = {
+                        CallManager.prepareAppOutgoingCall(recordThisCall = true)
+                        placePhoneCall(context, dialNumber.trim())
+                    },
+                    onDialWithoutRecord = {
+                        CallManager.prepareAppOutgoingCall(recordThisCall = false)
                         placePhoneCall(context, dialNumber.trim())
                     },
                     onImportAudio = {
@@ -265,9 +299,9 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = if (settings.autoRecordCalls) "自動監聽來去電：開啟" else "自動監聽：關閉",
+                        text = if (settings.autoAnalyzeAfterCall) "掛斷自動分析" else "掛斷先詢問分析",
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (settings.autoRecordCalls) MedicalTeal else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MedicalTeal
                     )
                 }
             }
@@ -297,7 +331,7 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = "接聽／撥出電話時會自動錄音，或點擊上方「手動錄音」、「匯入音檔」立即體驗腫瘤個管 AI 摘要與寄信。",
+                                text = "透過本 App 接聽或撥出錄音通話，結束後會先詢問您是否要進行 AI 摘要與寄信。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -309,9 +343,88 @@ fun HomeScreen(
                     CallRecordItemCard(
                         record = record,
                         onClick = { onOpenRecord(record.id) },
-                        onRetry = { viewModel.retryProcessing(record.id) }
+                        onAnalyzeOrRetry = { viewModel.retryProcessing(record.id) }
                     )
                 }
+            }
+        }
+    }
+
+    // Post-call confirmation dialog ("通話結束後先問我要不要分析")
+    val confirmRecord = pendingConfirmRecord
+    if (confirmRecord != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissConfirmKeepRecord() },
+            title = { Text("通話已結束，要進行 AI 分析嗎？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "通話對象：${confirmRecord.phoneNumber.ifBlank { confirmRecord.callDirection.label }}\n" +
+                            "錄音長度：${EmailFormatter.formatDuration(confirmRecord.durationSeconds)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "確認後將上傳至 Gemini 產出病人姓名、病歷號、個管師、重點摘要與逐字稿，並依設定自動寄信。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.confirmAnalyzeNow(confirmRecord.id) }) {
+                    Text("開始 AI 摘要並寄信")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { viewModel.discardRecord(confirmRecord) }) {
+                        Text("刪除錄音", color = UrgentRed)
+                    }
+                    TextButton(onClick = { viewModel.dismissConfirmKeepRecord() }) {
+                        Text("暫不分析")
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun DefaultDialerSetupCard(
+    onRequestDefaultDialer: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+        border = BorderStroke(1.dp, Color(0xFF3B82F6).copy(alpha = 0.5f))
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.PhoneInTalk, contentDescription = null, tint = Color(0xFF1D4ED8))
+                Text(
+                    text = "設為預設電話 App（推薦）",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color(0xFF1E3A8A)
+                )
+            }
+            Text(
+                text = "設為預設電話後，在本 App 收發的電話會顯示專屬接聽／通話畫面，可當下選擇「接聽並錄音」或「私人不錄音」，且結束後會先問您要不要分析。",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF1E40AF)
+            )
+            Button(
+                onClick = onRequestDefaultDialer,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Text("設為預設電話 App")
             }
         }
     }
@@ -413,14 +526,20 @@ private fun RecordingControlCard(
     recordingState: RecordingState,
     settings: AppSettings,
     isAccessibilityEnabled: Boolean,
+    isDefaultDialer: Boolean,
     dialNumber: String,
     onDialNumberChange: (String) -> Unit,
+    onAppendDigit: (String) -> Unit,
+    onBackspaceDigit: () -> Unit,
     onStartManualRecord: () -> Unit,
     onStopRecord: () -> Unit,
     onToggleSpeaker: () -> Unit,
-    onDialCall: () -> Unit,
+    onDialWithRecord: () -> Unit,
+    onDialWithoutRecord: () -> Unit,
     onImportAudio: () -> Unit
 ) {
+    var showDialpad by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -499,38 +618,72 @@ private fun RecordingControlCard(
                     ) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("停止並摘要")
+                        Text("停止錄音")
                     }
                 }
             } else {
-                Text(
-                    text = "快速撥號與錄音控制",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MedicalTeal
-                )
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = dialNumber,
-                        onValueChange = onDialNumberChange,
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("輸入回電號碼（選填）") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        shape = RoundedCornerShape(10.dp)
+                    Text(
+                        text = "撥號與錄音控制",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MedicalTeal
                     )
-                    Button(
-                        onClick = onDialCall,
-                        enabled = dialNumber.isNotBlank(),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp)
+                    TextButton(
+                        onClick = { showDialpad = !showDialpad },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {
-                        Icon(Icons.Default.Call, contentDescription = "撥號", modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Dialpad, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("撥號")
+                        Text(if (showDialpad) "收合鍵盤" else "開啟撥號鍵盤")
+                    }
+                }
+
+                OutlinedTextField(
+                    value = dialNumber,
+                    onValueChange = onDialNumberChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("輸入電話號碼...") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    trailingIcon = {
+                        if (dialNumber.isNotEmpty()) {
+                            IconButton(onClick = onBackspaceDigit) {
+                                Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "刪除")
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp)
+                )
+
+                if (showDialpad) {
+                    InAppDialpad(onDigit = onAppendDigit)
+                }
+
+                // Dual outgoing call buttons: Record vs Normal (no recording)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = onDialWithRecord,
+                        enabled = dialNumber.isNotBlank(),
+                        modifier = Modifier.weight(1.3f),
+                        colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen)
+                    ) {
+                        Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("撥號並錄音")
+                    }
+                    OutlinedButton(
+                        onClick = onDialWithoutRecord,
+                        enabled = dialNumber.isNotBlank(),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("一般撥號")
                     }
                 }
 
@@ -538,7 +691,7 @@ private fun RecordingControlCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Button(
+                    FilledTonalButton(
                         onClick = onStartManualRecord,
                         modifier = Modifier.weight(1f)
                     ) {
@@ -564,13 +717,13 @@ private fun RecordingControlCard(
                     )
                 }
 
-                val a11yStatusText = if (isAccessibilityEnabled) {
-                    "無障礙錄音服務：已啟用 ・ 音源：${settings.audioSource.name}"
-                } else {
-                    "無障礙錄音服務：尚未啟用（建議至上方啟用，避免通話中遭系統靜音）"
+                val statusLine = buildString {
+                    append(if (isDefaultDialer) "預設電話：已啟用" else "預設電話：未設定")
+                    append(" ・ ")
+                    append(if (isAccessibilityEnabled) "無障礙：已啟用 (${settings.audioSource.name})" else "無障礙：未啟用")
                 }
                 Text(
-                    text = a11yStatusText,
+                    text = statusLine,
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isAccessibilityEnabled) SuccessGreen else WarningAmber
                 )
@@ -580,10 +733,54 @@ private fun RecordingControlCard(
 }
 
 @Composable
+private fun InAppDialpad(onDigit: (String) -> Unit) {
+    val rows = listOf(
+        listOf("1", "2", "3"),
+        listOf("4", "5", "6"),
+        listOf("7", "8", "9"),
+        listOf("*", "0", "#")
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFF8FAFC))
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        rows.forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                row.forEach { digit ->
+                    Surface(
+                        onClick = { onDigit(digit) },
+                        shape = CircleShape,
+                        color = Color.White,
+                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                        modifier = Modifier.size(54.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = digit,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF0F172A)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun CallRecordItemCard(
     record: CallRecordEntity,
     onClick: () -> Unit,
-    onRetry: () -> Unit
+    onAnalyzeOrRetry: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -630,7 +827,6 @@ private fun CallRecordItemCard(
                 StatusBadge(record.processingStatus)
             }
 
-            // Key oncology metadata row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -700,9 +896,19 @@ private fun CallRecordItemCard(
                             style = MaterialTheme.typography.labelMedium,
                             color = SuccessGreen
                         )
-                    } else if (record.processingStatus == ProcessingStatus.FAILED || record.processingStatus == ProcessingStatus.PENDING) {
+                    } else if (record.processingStatus == ProcessingStatus.PENDING) {
+                        Button(
+                            onClick = onAnalyzeOrRetry,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("開始分析", style = MaterialTheme.typography.labelMedium)
+                        }
+                    } else if (record.processingStatus == ProcessingStatus.FAILED) {
                         FilledTonalButton(
-                            onClick = onRetry,
+                            onClick = onAnalyzeOrRetry,
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                             modifier = Modifier.height(30.dp)
                         ) {
@@ -739,10 +945,22 @@ private fun hasAudioPermission(context: Context): Boolean {
 private fun placePhoneCall(context: Context, rawNumber: String) {
     val sanitized = rawNumber.trim()
     if (sanitized.isEmpty()) return
+
     val hasCallPerm = ContextCompat.checkSelfPermission(
         context,
         Manifest.permission.CALL_PHONE
     ) == PackageManager.PERMISSION_GRANTED
+
+    val telUri = Uri.fromParts("tel", sanitized, null)
+    if (hasCallPerm) {
+        val telecom = context.getSystemService(TelecomManager::class.java)
+        val placed = runCatching {
+            telecom?.placeCall(telUri, Bundle())
+            telecom != null
+        }.getOrDefault(false)
+        if (placed) return
+    }
+
     val action = if (hasCallPerm) Intent.ACTION_CALL else Intent.ACTION_DIAL
     val intent = Intent(action, Uri.parse("tel:${Uri.encode(sanitized)}"))
     runCatching {

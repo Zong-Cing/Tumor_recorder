@@ -1,11 +1,13 @@
 package com.tumorrecorder.app.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -279,6 +281,8 @@ class CallRecordingService : Service() {
         val app = application as TumorRecorderApp
         val settings = app.container.settingsRepository.currentSettings()
 
+        val (quickPatient, quickId, quickCm) = CallManager.snapshotQuickNotes()
+
         serviceScope.launch(Dispatchers.IO) {
             val repo = app.container.callRecordRepository
 
@@ -290,6 +294,9 @@ class CallRecordingService : Service() {
                             existing.copy(
                                 phoneNumber = existing.phoneNumber.ifBlank { phoneNumber },
                                 durationSeconds = elapsed,
+                                patientName = existing.patientName.ifBlank { quickPatient },
+                                patientIdentifier = existing.patientIdentifier.ifBlank { quickId },
+                                caseManagerName = existing.caseManagerName.ifBlank { quickCm },
                                 status = ProcessingStatus.PENDING.name,
                                 errorMessage = null
                             )
@@ -305,6 +312,9 @@ class CallRecordingService : Service() {
                             durationSeconds = elapsed,
                             audioFilePath = file.absolutePath,
                             audioMimeType = "audio/mp4",
+                            patientName = quickPatient,
+                            patientIdentifier = quickId,
+                            caseManagerName = quickCm,
                             status = ProcessingStatus.PENDING.name
                         )
                     )
@@ -312,6 +322,9 @@ class CallRecordingService : Service() {
 
                 if (settings.autoAnalyzeAfterCall) {
                     repo.enqueueProcessing(finalId)
+                } else {
+                    _pendingConfirmRecordId.value = finalId
+                    showPostCallConfirmNotification(finalId, phoneNumber, elapsed)
                 }
             } else {
                 // Recording too short or failed; remove placeholder
@@ -323,6 +336,39 @@ class CallRecordingService : Service() {
 
             stopSelfSafely()
         }
+    }
+
+    private fun showPostCallConfirmNotification(recordId: Long, phoneNumber: String, durationSeconds: Long) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) return
+        }
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_CONFIRM_RECORD_ID, recordId)
+        }
+        val pending = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ID_CONFIRM,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val callerLabel = phoneNumber.ifBlank { "本次通話" }
+        val notification = NotificationCompat.Builder(this, TumorRecorderApp.CHANNEL_STATUS)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("通話已結束（$callerLabel・${EmailFormatter.formatDuration(durationSeconds)}）")
+            .setContentText("要對此錄音進行 AI 摘要與寄信嗎？點此確認或捨棄。")
+            .setAutoCancel(true)
+            .setContentIntent(pending)
+            .build()
+
+        getSystemService(NotificationManager::class.java)
+            ?.notify(NOTIFICATION_ID_CONFIRM, notification)
     }
 
     private fun toggleSpeakerphone() {
@@ -447,6 +493,7 @@ class CallRecordingService : Service() {
     companion object {
         private const val TAG = "CallRecordingService"
         private const val NOTIFICATION_ID = 1001
+        private const val NOTIFICATION_ID_CONFIRM = 1002
 
         const val ACTION_START = "com.tumorrecorder.app.action.START_RECORDING"
         const val ACTION_STOP = "com.tumorrecorder.app.action.STOP_RECORDING"
@@ -459,6 +506,17 @@ class CallRecordingService : Service() {
 
         private val _recordingState = MutableStateFlow(RecordingState())
         val recordingState: StateFlow<RecordingState> = _recordingState.asStateFlow()
+
+        private val _pendingConfirmRecordId = MutableStateFlow<Long?>(null)
+        val pendingConfirmRecordId: StateFlow<Long?> = _pendingConfirmRecordId.asStateFlow()
+
+        fun requestConfirmForRecord(recordId: Long) {
+            _pendingConfirmRecordId.value = recordId
+        }
+
+        fun clearPendingConfirm() {
+            _pendingConfirmRecordId.value = null
+        }
 
         fun startRecording(
             context: Context,

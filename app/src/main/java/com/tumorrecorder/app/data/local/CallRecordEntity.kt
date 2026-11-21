@@ -27,6 +27,7 @@ data class CallRecordEntity(
     val summary: String = "",
     val actionItemsText: String = "",
     val transcript: String = "",
+    val promptTemplateName: String = "",
     // Email tracking
     val emailSent: Boolean = false,
     val emailSentAtMillis: Long? = null,

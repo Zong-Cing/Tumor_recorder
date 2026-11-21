@@ -10,7 +10,14 @@ import com.tumorrecorder.app.data.remote.EmailService
 import com.tumorrecorder.app.data.remote.GeminiService
 import com.tumorrecorder.app.data.repository.CallRecordRepository
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+
 class TumorRecorderApp : Application() {
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     lateinit var container: AppContainer
         private set
@@ -19,6 +26,9 @@ class TumorRecorderApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         createNotificationChannels()
+        appScope.launch {
+            container.promptTemplateRepository.ensureSeeded()
+        }
     }
 
     private fun createNotificationChannels() {
@@ -69,6 +79,8 @@ class AppContainer(application: Application) {
     val settingsRepository: SettingsRepository = SettingsRepository(application)
     val geminiService: GeminiService = GeminiService()
     val emailService: EmailService = EmailService()
+    val promptTemplateRepository: com.tumorrecorder.app.data.repository.PromptTemplateRepository =
+        com.tumorrecorder.app.data.repository.PromptTemplateRepository(database.promptTemplateDao())
     val callRecordRepository: CallRecordRepository = CallRecordRepository(
         context = application,
         dao = database.callRecordDao(),

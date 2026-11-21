@@ -123,8 +123,11 @@ class InCallActivity : ComponentActivity() {
                 if (confirmId != null && (callState == null || callState?.state == Call.STATE_DISCONNECTED)) {
                     PostCallAnalysisPromptScreen(
                         recordId = confirmId,
-                        onAnalyzeNow = {
-                            container.callRecordRepository.enqueueProcessing(confirmId)
+                        onAnalyzeNow = { selectedPromptId ->
+                            container.callRecordRepository.enqueueProcessing(
+                                recordId = confirmId,
+                                promptTemplateId = selectedPromptId
+                            )
                             CallRecordingService.clearPendingConfirm()
                             openHomeAndFinish()
                         },
@@ -562,7 +565,7 @@ private fun DtmfKeypad(entered: String, onDigit: (Char) -> Unit) {
 @Composable
 private fun PostCallAnalysisPromptScreen(
     recordId: Long,
-    onAnalyzeNow: () -> Unit,
+    onAnalyzeNow: (Long) -> Unit,
     onKeepForLater: () -> Unit,
     onDiscardRecording: () -> Unit
 ) {
@@ -571,12 +574,22 @@ private fun PostCallAnalysisPromptScreen(
     val record by app.container.callRecordRepository
         .observeRecord(recordId)
         .collectAsStateWithLifecycle(initialValue = null)
+    val templates by app.container.promptTemplateRepository
+        .observeAll()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+
+    var selectedPromptId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(templates) {
+        if (selectedPromptId == null && templates.isNotEmpty()) {
+            selectedPromptId = (templates.firstOrNull { it.isDefault } ?: templates.first()).id
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0F172A))
-            .padding(24.dp),
+            .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
         Card(
@@ -585,8 +598,11 @@ private fun PostCallAnalysisPromptScreen(
             shape = RoundedCornerShape(20.dp)
         ) {
             Column(
-                modifier = Modifier.padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
                     text = "通話已結束，要進行 AI 分析嗎？",
@@ -596,24 +612,32 @@ private fun PostCallAnalysisPromptScreen(
                 val info = record
                 if (info != null) {
                     Text(
-                        text = "通話號碼：${info.phoneNumber.ifBlank { "未知號碼" }}\n" +
-                            "錄音長度：${EmailFormatter.formatDuration(info.durationSeconds)}",
+                        text = "通話號碼：${info.phoneNumber.ifBlank { "未知號碼" }} ・ 錄音長度：${EmailFormatter.formatDuration(info.durationSeconds)}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
                 Text(
-                    text = "選擇「開始分析」將上傳錄音至 Gemini 產出腫瘤個管摘要與完整逐字稿，完成後依設定自動寄信。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "請選擇要使用的分析 Prompt：",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MedicalTeal
                 )
 
+                com.tumorrecorder.app.ui.components.PromptTemplatePickerList(
+                    templates = templates,
+                    selectedTemplateId = selectedPromptId,
+                    onSelect = { selectedPromptId = it }
+                )
+
+                Spacer(Modifier.height(4.dp))
+
                 Button(
-                    onClick = onAnalyzeNow,
+                    onClick = { onAnalyzeNow(selectedPromptId ?: -1L) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = MedicalTeal)
                 ) {
-                    Text("開始 AI 摘要並寄信")
+                    Text("使用此 Prompt 開始分析並寄信")
                 }
 
                 FilledTonalButton(

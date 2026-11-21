@@ -30,6 +30,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dialpad
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
@@ -117,6 +120,7 @@ fun HomeScreen(
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit,
     onOpenRecord: (Long) -> Unit,
+    onOpenPrompts: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
@@ -127,6 +131,9 @@ fun HomeScreen(
     val dialNumber by viewModel.dialNumber.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val pendingConfirmRecord by viewModel.pendingConfirmRecord.collectAsStateWithLifecycle()
+    val promptTemplates by viewModel.promptTemplates.collectAsStateWithLifecycle()
+
+    var manualAnalyzeRecordId by remember { mutableStateOf<Long?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -170,6 +177,9 @@ fun HomeScreen(
                     actionIconContentColor = Color.White
                 ),
                 actions = {
+                    IconButton(onClick = onOpenPrompts) {
+                        Icon(Icons.Default.EditNote, contentDescription = "編輯分析 Prompt")
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "設定")
                     }
@@ -331,7 +341,7 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = "透過本 App 接聽或撥出錄音通話，結束後會先詢問您是否要進行 AI 摘要與寄信。",
+                                text = "透過本 App 接聽或撥出錄音通話，結束後會先詢問您要使用哪組 Prompt 進行 AI 摘要與寄信。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -343,37 +353,62 @@ fun HomeScreen(
                     CallRecordItemCard(
                         record = record,
                         onClick = { onOpenRecord(record.id) },
-                        onAnalyzeOrRetry = { viewModel.retryProcessing(record.id) }
+                        onAnalyzeOrRetry = { manualAnalyzeRecordId = record.id }
                     )
                 }
             }
         }
     }
 
-    // Post-call confirmation dialog ("通話結束後先問我要不要分析")
+    // Post-call confirmation dialog with Prompt template picker
     val confirmRecord = pendingConfirmRecord
     if (confirmRecord != null) {
+        var selectedPromptId by remember(confirmRecord.id, promptTemplates) {
+            mutableStateOf(
+                (promptTemplates.firstOrNull { it.isDefault } ?: promptTemplates.firstOrNull())?.id
+            )
+        }
         AlertDialog(
             onDismissRequest = { viewModel.dismissConfirmKeepRecord() },
-            title = { Text("通話已結束，要進行 AI 分析嗎？") },
+            title = { Text("通話已結束，選擇分析 Prompt") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Text(
-                        text = "通話對象：${confirmRecord.phoneNumber.ifBlank { confirmRecord.callDirection.label }}\n" +
-                            "錄音長度：${EmailFormatter.formatDuration(confirmRecord.durationSeconds)}",
+                        text = "對象：${confirmRecord.phoneNumber.ifBlank { confirmRecord.callDirection.label }} ・ 長度：${EmailFormatter.formatDuration(confirmRecord.durationSeconds)}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
-                    Text(
-                        text = "確認後將上傳至 Gemini 產出病人姓名、病歷號、個管師、重點摘要與逐字稿，並依設定自動寄信。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    com.tumorrecorder.app.ui.components.PromptTemplatePickerList(
+                        templates = promptTemplates,
+                        selectedTemplateId = selectedPromptId,
+                        onSelect = { selectedPromptId = it }
                     )
+                    TextButton(
+                        onClick = {
+                            viewModel.dismissConfirmKeepRecord()
+                            onOpenPrompts()
+                        },
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                    ) {
+                        Text("編輯或新增 Prompt 範本 →")
+                    }
                 }
             },
             confirmButton = {
-                Button(onClick = { viewModel.confirmAnalyzeNow(confirmRecord.id) }) {
-                    Text("開始 AI 摘要並寄信")
+                Button(
+                    onClick = {
+                        viewModel.confirmAnalyzeNow(
+                            recordId = confirmRecord.id,
+                            promptTemplateId = selectedPromptId ?: -1L
+                        )
+                    }
+                ) {
+                    Text("開始分析並寄信")
                 }
             },
             dismissButton = {
@@ -384,6 +419,49 @@ fun HomeScreen(
                     TextButton(onClick = { viewModel.dismissConfirmKeepRecord() }) {
                         Text("暫不分析")
                     }
+                }
+            }
+        )
+    }
+
+    // Prompt picker dialog when tapping "開始分析" / "重試" on an existing list record
+    val targetManualId = manualAnalyzeRecordId
+    if (targetManualId != null) {
+        var selectedPromptId by remember(targetManualId, promptTemplates) {
+            mutableStateOf(
+                (promptTemplates.firstOrNull { it.isDefault } ?: promptTemplates.firstOrNull())?.id
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { manualAnalyzeRecordId = null },
+            title = { Text("選擇要使用的分析 Prompt") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    com.tumorrecorder.app.ui.components.PromptTemplatePickerList(
+                        templates = promptTemplates,
+                        selectedTemplateId = selectedPromptId,
+                        onSelect = { selectedPromptId = it }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.analyzeWithPrompt(targetManualId, selectedPromptId ?: -1L)
+                        manualAnalyzeRecordId = null
+                    }
+                ) {
+                    Text("開始 AI 分析")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { manualAnalyzeRecordId = null }) {
+                    Text("取消")
                 }
             }
         )

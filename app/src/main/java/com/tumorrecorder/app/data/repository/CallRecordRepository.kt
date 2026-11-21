@@ -85,7 +85,11 @@ class CallRecordRepository(
         id
     }
 
-    fun enqueueProcessing(recordId: Long, forceSendEmail: Boolean = false) {
+    fun enqueueProcessing(
+        recordId: Long,
+        promptTemplateId: Long = -1L,
+        forceSendEmail: Boolean = false
+    ) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
@@ -95,6 +99,7 @@ class CallRecordRepository(
             .setInputData(
                 workDataOf(
                     CallProcessingWorker.KEY_RECORD_ID to recordId,
+                    CallProcessingWorker.KEY_PROMPT_TEMPLATE_ID to promptTemplateId,
                     CallProcessingWorker.KEY_FORCE_EMAIL to forceSendEmail
                 )
             )

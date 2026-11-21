@@ -168,6 +168,9 @@ object EmailFormatter {
             appendLine("緊急程度：${record.urgencyLevel.ifBlank { "一般" }}")
             appendLine("通話類型：${record.callDirection.label} / 號碼：${record.phoneNumber.ifBlank { "未知" }}")
             appendLine("通話時間：${formatTimestamp(record.startedAtMillis)}（時長 ${formatDuration(record.durationSeconds)}）")
+            if (record.promptTemplateName.isNotBlank()) {
+                appendLine("使用分析範本：${record.promptTemplateName}")
+            }
             appendLine()
             appendLine("【通話討論摘要】")
             appendLine(record.summary.ifBlank { "（無摘要內容）" })
@@ -246,7 +249,11 @@ object EmailFormatter {
         <tr>
           <td style="padding:8px 12px;background:#F8FAFC;border:1px solid #E2E8F0;font-weight:600;">通話時間／時長</td>
           <td style="padding:8px 12px;border:1px solid #E2E8F0;">${escapeHtml(formatTimestamp(record.startedAtMillis))}（${escapeHtml(formatDuration(record.durationSeconds))}）</td>
-        </tr>
+        </tr>${if (record.promptTemplateName.isNotBlank()) """
+        <tr>
+          <td style="padding:8px 12px;background:#F8FAFC;border:1px solid #E2E8F0;font-weight:600;">使用分析範本</td>
+          <td style="padding:8px 12px;border:1px solid #E2E8F0;">${escapeHtml(record.promptTemplateName)}</td>
+        </tr>""" else ""}
       </table>
 
       <h3 style="font-size:16px;color:#0F766E;border-bottom:2px solid #CCFBF1;padding-bottom:6px;margin:20px 0 10px 0;">通話討論摘要</h3>

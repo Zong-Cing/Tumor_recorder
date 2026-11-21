@@ -33,11 +33,13 @@ class CallProcessingWorker(
 
     override suspend fun doWork(): Result {
         val recordId = inputData.getLong(KEY_RECORD_ID, -1L)
+        val promptTemplateId = inputData.getLong(KEY_PROMPT_TEMPLATE_ID, -1L)
         val forceEmail = inputData.getBoolean(KEY_FORCE_EMAIL, false)
         if (recordId <= 0L) return Result.failure()
 
         val app = applicationContext as TumorRecorderApp
         val repo = app.container.callRecordRepository
+        val promptRepo = app.container.promptTemplateRepository
         val settings = app.container.settingsRepository.currentSettings()
         val geminiService = app.container.geminiService
         val emailService = app.container.emailService
@@ -66,9 +68,16 @@ class CallProcessingWorker(
             return Result.failure()
         }
 
+        val chosenTemplate = if (promptTemplateId > 0L) {
+            promptRepo.getById(promptTemplateId) ?: promptRepo.getDefaultOrFirst()
+        } else {
+            promptRepo.getDefaultOrFirst()
+        }
+
         // Step 1: Transcribe & Summarize via Gemini
         record = record.copy(
             status = ProcessingStatus.TRANSCRIBING.name,
+            promptTemplateName = chosenTemplate.name,
             errorMessage = null
         )
         repo.updateRecord(record)
@@ -79,7 +88,8 @@ class CallProcessingWorker(
                 mimeType = record.audioMimeType.ifBlank { "audio/mp4" },
                 phoneNumber = record.phoneNumber,
                 callTimeDisplay = EmailFormatter.formatTimestamp(record.startedAtMillis),
-                settings = settings
+                settings = settings,
+                promptTemplate = chosenTemplate
             )
         } catch (e: Exception) {
             Log.e(TAG, "Gemini processing failed for record $recordId", e)
@@ -109,6 +119,7 @@ class CallProcessingWorker(
             summary = summaryResult.summary,
             actionItemsText = summaryResult.actionItems.joinToString("\n"),
             transcript = summaryResult.transcript,
+            promptTemplateName = chosenTemplate.name,
             errorMessage = null
         )
 
@@ -214,6 +225,7 @@ class CallProcessingWorker(
     companion object {
         private const val TAG = "CallProcessingWorker"
         const val KEY_RECORD_ID = "record_id"
+        const val KEY_PROMPT_TEMPLATE_ID = "prompt_template_id"
         const val KEY_FORCE_EMAIL = "force_email"
     }
 }

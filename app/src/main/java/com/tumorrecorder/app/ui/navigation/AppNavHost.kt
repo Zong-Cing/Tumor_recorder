@@ -15,6 +15,8 @@ import com.tumorrecorder.app.ui.detail.RecordDetailScreen
 import com.tumorrecorder.app.ui.detail.RecordDetailViewModel
 import com.tumorrecorder.app.ui.home.HomeScreen
 import com.tumorrecorder.app.ui.home.HomeViewModel
+import com.tumorrecorder.app.ui.prompts.PromptManagerScreen
+import com.tumorrecorder.app.ui.prompts.PromptManagerViewModel
 import com.tumorrecorder.app.ui.settings.SettingsScreen
 import com.tumorrecorder.app.ui.settings.SettingsViewModel
 
@@ -22,6 +24,7 @@ private object Routes {
     const val HOME = "home"
     const val DETAIL = "detail/{recordId}"
     const val SETTINGS = "settings"
+    const val PROMPTS = "prompts"
 
     fun detail(recordId: Long) = "detail/$recordId"
 }
@@ -73,6 +76,7 @@ fun AppNavHost(
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onOpenAppDetailsSettings = onOpenAppDetailsSettings,
                 onOpenRecord = { id -> navController.navigate(Routes.detail(id)) },
+                onOpenPrompts = { navController.navigate(Routes.PROMPTS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) }
             )
         }
@@ -101,6 +105,15 @@ fun AppNavHost(
                 onRequestDefaultDialer = onRequestDefaultDialer,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onOpenAppDetailsSettings = onOpenAppDetailsSettings,
+                onOpenPrompts = { navController.navigate(Routes.PROMPTS) },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Routes.PROMPTS) {
+            val vm: PromptManagerViewModel = viewModel(factory = PromptManagerViewModel.factory(container))
+            PromptManagerScreen(
+                viewModel = vm,
                 onBack = { navController.popBackStack() }
             )
         }

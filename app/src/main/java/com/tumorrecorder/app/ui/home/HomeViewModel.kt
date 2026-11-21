@@ -37,6 +37,15 @@ class HomeViewModel(
 
     val settings: StateFlow<AppSettings> = container.settingsRepository.settings
 
+    val promptTemplates: StateFlow<List<com.tumorrecorder.app.data.local.PromptTemplateEntity>> =
+        container.promptTemplateRepository
+            .observeAll()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
+
     val pendingConfirmRecord: StateFlow<CallRecordEntity?> = CallRecordingService.pendingConfirmRecordId
         .flatMapLatest { id ->
             if (id != null && id > 0L) container.callRecordRepository.observeRecord(id) else flowOf(null)
@@ -90,9 +99,12 @@ class HomeViewModel(
         }
     }
 
-    fun confirmAnalyzeNow(recordId: Long) {
+    fun confirmAnalyzeNow(recordId: Long, promptTemplateId: Long) {
         CallRecordingService.clearPendingConfirm()
-        container.callRecordRepository.enqueueProcessing(recordId)
+        container.callRecordRepository.enqueueProcessing(
+            recordId = recordId,
+            promptTemplateId = promptTemplateId
+        )
         _snackbarMessage.value = "已開始 Gemini AI 轉錄摘要，完成後將依設定自動寄信"
     }
 
@@ -109,9 +121,12 @@ class HomeViewModel(
         }
     }
 
-    fun retryProcessing(recordId: Long) {
-        container.callRecordRepository.enqueueProcessing(recordId)
-        _snackbarMessage.value = "已加入 AI 摘要分析佇列"
+    fun analyzeWithPrompt(recordId: Long, promptTemplateId: Long) {
+        container.callRecordRepository.enqueueProcessing(
+            recordId = recordId,
+            promptTemplateId = promptTemplateId
+        )
+        _snackbarMessage.value = "已使用指定 Prompt 加入 AI 摘要分析佇列"
     }
 
     fun clearSnackbar() {

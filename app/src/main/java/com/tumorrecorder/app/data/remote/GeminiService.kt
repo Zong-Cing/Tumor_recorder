@@ -1,5 +1,6 @@
 package com.tumorrecorder.app.data.remote
 
+import com.tumorrecorder.app.data.local.PromptTemplateEntity
 import com.tumorrecorder.app.domain.PromptBuilder
 import com.tumorrecorder.app.domain.model.AppSettings
 import com.tumorrecorder.app.domain.model.OncologySummaryResult
@@ -48,7 +49,8 @@ class GeminiService(
         mimeType: String,
         phoneNumber: String?,
         callTimeDisplay: String,
-        settings: AppSettings
+        settings: AppSettings,
+        promptTemplate: PromptTemplateEntity? = null
     ): OncologySummaryResult = withContext(Dispatchers.IO) {
         val apiKey = settings.geminiApiKey.trim()
         require(apiKey.isNotEmpty()) { "尚未設定 Gemini API Key，請先至「設定」頁面填入。" }
@@ -57,7 +59,8 @@ class GeminiService(
         val uploaded = uploadAudioFile(audioFile, mimeType, apiKey)
         try {
             waitUntilFileActive(uploaded.name, apiKey)
-            val prompt = PromptBuilder.buildOncologyCallPrompt(
+            val prompt = PromptBuilder.buildFromTemplate(
+                template = promptTemplate,
                 phoneNumber = phoneNumber,
                 callTimeDisplay = callTimeDisplay,
                 settings = settings

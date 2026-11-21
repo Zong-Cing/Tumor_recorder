@@ -90,6 +90,7 @@ fun RecordDetailScreen(
     onBack: () -> Unit
 ) {
     val record by viewModel.record.collectAsStateWithLifecycle()
+    val promptTemplates by viewModel.promptTemplates.collectAsStateWithLifecycle()
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val deleted by viewModel.deleted.collectAsStateWithLifecycle()
@@ -100,6 +101,7 @@ fun RecordDetailScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var isEditing by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showReanalyzePicker by remember { mutableStateOf(false) }
 
     // Editable drafts
     var draftPatientName by remember { mutableStateOf("") }
@@ -367,6 +369,9 @@ fun RecordDetailScreen(
                             "${current.phoneNumber.ifBlank { "未知號碼" }}（${current.callDirection.label}）・${EmailFormatter.formatDuration(current.durationSeconds)}"
                         )
                         InfoRow("通話時間", EmailFormatter.formatTimestamp(current.startedAtMillis))
+                        if (current.promptTemplateName.isNotBlank()) {
+                            InfoRow("使用分析範本", current.promptTemplateName, valueColor = MedicalTeal)
+                        }
                         if (current.emailSent && current.emailSentAtMillis != null) {
                             InfoRow(
                                 "寄信狀態",
@@ -402,12 +407,12 @@ fun RecordDetailScreen(
                 }
 
                 FilledTonalButton(
-                    onClick = { viewModel.reAnalyze() },
+                    onClick = { showReanalyzePicker = true },
                     enabled = !isBusy && current.audioFilePath.isNotBlank()
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("重新 AI 分析")
+                    Text("更換 Prompt 重分析")
                 }
 
                 OutlinedButton(
@@ -500,6 +505,47 @@ fun RecordDetailScreen(
 
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    if (showReanalyzePicker) {
+        var selectedPromptId by remember(promptTemplates) {
+            mutableStateOf(
+                (promptTemplates.firstOrNull { it.isDefault } ?: promptTemplates.firstOrNull())?.id
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { showReanalyzePicker = false },
+            title = { Text("選擇要重新分析的 Prompt") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    com.tumorrecorder.app.ui.components.PromptTemplatePickerList(
+                        templates = promptTemplates,
+                        selectedTemplateId = selectedPromptId,
+                        onSelect = { selectedPromptId = it }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showReanalyzePicker = false
+                        viewModel.reAnalyze(selectedPromptId ?: -1L)
+                    }
+                ) {
+                    Text("開始重新分析")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReanalyzePicker = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 
     if (showDeleteDialog) {

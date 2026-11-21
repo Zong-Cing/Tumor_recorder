@@ -75,6 +75,7 @@ fun SettingsScreen(
     onRequestDefaultDialer: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit,
+    onOpenPrompts: () -> Unit,
     onBack: () -> Unit
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -322,13 +323,20 @@ fun SettingsScreen(
                     singleLine = true
                 )
 
+                OutlinedButton(
+                    onClick = onOpenPrompts,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("管理與編輯分析 Prompt 範本（可新增多組）")
+                }
+
                 OutlinedTextField(
                     value = settings.customPromptAppendix,
                     onValueChange = { v -> viewModel.update { it.copy(customPromptAppendix = v) } },
-                    label = { Text("額外個管摘要指示（選填）") },
+                    label = { Text("全域補充指示（選填，會附加於所有範本尾端）") },
                     placeholder = { Text("例如：若有提及化療藥物名稱請特別標記劑量與施打日期...") },
                     modifier = Modifier.fillMaxWidth(),
-                    minLines = 3
+                    minLines = 2
                 )
 
                 Button(

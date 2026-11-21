@@ -25,6 +25,15 @@ class RecordDetailViewModel(
             initialValue = null
         )
 
+    val promptTemplates: StateFlow<List<com.tumorrecorder.app.data.local.PromptTemplateEntity>> =
+        container.promptTemplateRepository
+            .observeAll()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
+
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
@@ -64,9 +73,13 @@ class RecordDetailViewModel(
         }
     }
 
-    fun reAnalyze() {
-        container.callRecordRepository.enqueueProcessing(recordId, forceSendEmail = false)
-        _message.value = "已排程重新進行 Gemini AI 轉錄與摘要"
+    fun reAnalyze(promptTemplateId: Long = -1L) {
+        container.callRecordRepository.enqueueProcessing(
+            recordId = recordId,
+            promptTemplateId = promptTemplateId,
+            forceSendEmail = false
+        )
+        _message.value = "已使用選定 Prompt 排程重新進行 Gemini AI 轉錄與摘要"
     }
 
     fun resendEmail() {

@@ -61,6 +61,8 @@ class CallRecordingService : Service() {
     private var activeAudioSourceLabel: String = ""
     private var timerJob: Job? = null
     private var speakerToggledByService: Boolean = false
+    @Volatile
+    private var isActivelyRecording: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -112,7 +114,7 @@ class CallRecordingService : Service() {
         direction: CallDirection,
         fromPhoneCall: Boolean
     ) {
-        if (_recordingState.value.isRecording) return
+        if (isActivelyRecording || _recordingState.value.isRecording) return
 
         val app = application as TumorRecorderApp
         val settings = app.container.settingsRepository.currentSettings()
@@ -121,6 +123,7 @@ class CallRecordingService : Service() {
         startedAtMillis = System.currentTimeMillis()
         activePhoneNumber = phoneNumber
         activeDirection = direction
+        activeRecordId = null
         val file = File(recordingsDir, "call_${startedAtMillis}.m4a")
         outputFile = file
 
@@ -136,6 +139,7 @@ class CallRecordingService : Service() {
             fromPhoneCall = fromPhoneCall
         )
         if (usedSource == null) {
+            outputFile = null
             _recordingState.value = RecordingState(
                 isRecording = false,
                 errorMessage = "無法啟動通話錄音，請確認已開啟「無障礙錄音服務」與麥克風權限。"
@@ -144,6 +148,7 @@ class CallRecordingService : Service() {
             return
         }
 
+        isActivelyRecording = true
         val a11yTag = if (CallRecorderAccessibilityService.isServiceEnabled(this)) "無障礙已啟用" else "無障礙未啟用"
         activeAudioSourceLabel = "${usedSource.name} ($a11yTag)"
         val currentSpeaker = isSpeakerphoneCurrentlyOn()
@@ -246,6 +251,12 @@ class CallRecordingService : Service() {
     }
 
     private fun finishRecording() {
+        if (!isActivelyRecording) {
+            Log.d(TAG, "Ignoring duplicate ACTION_STOP while not recording")
+            return
+        }
+        isActivelyRecording = false
+
         timerJob?.cancel()
         timerJob = null
 
@@ -255,6 +266,8 @@ class CallRecordingService : Service() {
         val phoneNumber = activePhoneNumber
         val direction = activeDirection
         val startMillis = startedAtMillis
+        outputFile = null
+        activeRecordId = null
 
         val recorder = mediaRecorder
         mediaRecorder = null

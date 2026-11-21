@@ -308,7 +308,12 @@ object GeminiResponseParser {
         val parts = candidates[0].jsonObject["content"]?.jsonObject?.get("parts")?.jsonArray
             ?: throw IOException("Gemini 回應中缺少 content.parts")
 
-        return parts.mapNotNull { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
+        val nonThoughtParts = parts.filterNot {
+            it.jsonObject["thought"]?.jsonPrimitive?.contentOrNull?.equals("true", ignoreCase = true) == true
+        }
+        val effectiveParts = nonThoughtParts.ifEmpty { parts }
+
+        return effectiveParts.mapNotNull { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
             .joinToString("\n")
             .trim()
     }

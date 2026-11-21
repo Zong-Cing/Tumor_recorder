@@ -216,7 +216,11 @@ object CallManager {
         }
     }
 
+    @Volatile
+    private var lastQuickNotes: Triple<String, String, String> = Triple("", "", "")
+
     fun updateQuickNotes(patientName: String, patientIdentifier: String, caseManager: String) {
+        lastQuickNotes = Triple(patientName.trim(), patientIdentifier.trim(), caseManager.trim())
         val current = _callState.value ?: return
         _callState.value = current.copy(
             quickPatientName = patientName,
@@ -226,8 +230,14 @@ object CallManager {
     }
 
     fun snapshotQuickNotes(): Triple<String, String, String> {
-        val c = _callState.value ?: return Triple("", "", "")
-        return Triple(c.quickPatientName.trim(), c.quickPatientIdentifier.trim(), c.quickCaseManager.trim())
+        val c = _callState.value
+        val result = if (c != null) {
+            Triple(c.quickPatientName.trim(), c.quickPatientIdentifier.trim(), c.quickCaseManager.trim())
+        } else {
+            lastQuickNotes
+        }
+        lastQuickNotes = Triple("", "", "")
+        return result
     }
 
     private fun startRecordingIfNeeded(context: Context, number: String, isIncoming: Boolean) {

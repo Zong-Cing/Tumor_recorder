@@ -9,8 +9,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.Properties
+import javax.activation.CommandMap
 import javax.activation.DataHandler
 import javax.activation.FileDataSource
+import javax.activation.MailcapCommandMap
 import javax.mail.Authenticator
 import javax.mail.Message
 import javax.mail.PasswordAuthentication
@@ -32,6 +34,8 @@ class EmailService {
         require(settings.senderEmail.isNotBlank()) { "尚未設定寄件者 Gmail 帳號" }
         require(settings.senderAppPassword.isNotBlank()) { "尚未設定 Gmail 應用程式密碼" }
         require(recipients.isNotEmpty()) { "尚未設定有效的收件人 Email" }
+
+        ensureAndroidMailcapRegistered()
 
         val session = buildMailSession(settings)
         val message = MimeMessage(session).apply {
@@ -68,7 +72,7 @@ class EmailService {
             message.setContent(alternativePart)
         }
 
-        Transport.send(message)
+        sendMessageWithMailClassLoader(message)
     }
 
     suspend fun sendTestEmail(settings: AppSettings) = withContext(Dispatchers.IO) {
@@ -76,6 +80,8 @@ class EmailService {
         require(settings.senderEmail.isNotBlank()) { "請先填寫寄件者 Gmail 帳號" }
         require(settings.senderAppPassword.isNotBlank()) { "請先填寫 Gmail 應用程式密碼" }
         require(recipients.isNotEmpty()) { "請先填寫收件人 Email" }
+
+        ensureAndroidMailcapRegistered()
 
         val session = buildMailSession(settings)
         val message = MimeMessage(session).apply {
@@ -85,20 +91,51 @@ class EmailService {
             }
             setSubject("[腫瘤個管通話助理] 測試信件連線成功", "UTF-8")
             sentDate = Date()
-            setText(
-                """
-                您好：
+            val alternative = MimeMultipart("alternative").apply {
+                addBodyPart(MimeBodyPart().apply {
+                    setText(
+                        """
+                        您好：
 
-                這是由「腫瘤個管通話助理」App 發出的 SMTP 測試信件。
-                收到此信代表您的 Gmail 應用程式密碼與收件設定均已正確配置。
+                        這是由「腫瘤個管通話助理」App 發出的 SMTP 測試信件。
+                        收到此信代表您的 Gmail 應用程式密碼與收件設定均已正確配置。
 
-                單位名稱：${settings.defaultCaseManagerUnit}
-                寄出時間：${EmailFormatter.formatTimestamp(System.currentTimeMillis())}
-                """.trimIndent(),
-                "UTF-8"
-            )
+                        單位名稱：${settings.defaultCaseManagerUnit}
+                        寄出時間：${EmailFormatter.formatTimestamp(System.currentTimeMillis())}
+                        """.trimIndent(),
+                        "UTF-8"
+                    )
+                })
+                addBodyPart(MimeBodyPart().apply {
+                    setContent(
+                        "<p>您好：</p><p>這是由「腫瘤個管通話助理」App 發出的 HTML 測試信件，代表 Gmail SMTP 與多格式郵件設定均已正常運作。</p><p>單位名稱：${EmailFormatter.escapeHtml(settings.defaultCaseManagerUnit)}<br/>寄出時間：${EmailFormatter.formatTimestamp(System.currentTimeMillis())}</p>",
+                        "text/html; charset=UTF-8"
+                    )
+                })
+            }
+            setContent(alternative)
         }
-        Transport.send(message)
+        sendMessageWithMailClassLoader(message)
+    }
+
+    private fun sendMessageWithMailClassLoader(message: MimeMessage) {
+        val prev = Thread.currentThread().contextClassLoader
+        try {
+            Thread.currentThread().contextClassLoader = MimeMessage::class.java.classLoader
+            Transport.send(message)
+        } finally {
+            Thread.currentThread().contextClassLoader = prev
+        }
+    }
+
+    private fun ensureAndroidMailcapRegistered() {
+        val mc = (CommandMap.getDefaultCommandMap() as? MailcapCommandMap) ?: MailcapCommandMap()
+        mc.addMailcap("text/html;; x-java-content-handler=com.sun.mail.handlers.text_html")
+        mc.addMailcap("text/xml;; x-java-content-handler=com.sun.mail.handlers.text_xml")
+        mc.addMailcap("text/plain;; x-java-content-handler=com.sun.mail.handlers.text_plain")
+        mc.addMailcap("multipart/*;; x-java-content-handler=com.sun.mail.handlers.multipart_mixed")
+        mc.addMailcap("message/rfc822;; x-java-content-handler=com.sun.mail.handlers.message_rfc822")
+        CommandMap.setDefaultCommandMap(mc)
     }
 
     private fun buildMailSession(settings: AppSettings): Session {

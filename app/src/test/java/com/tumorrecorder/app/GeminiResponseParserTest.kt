@@ -43,4 +43,32 @@ class GeminiResponseParserTest {
         assertTrue(stripped.startsWith("{"))
         assertTrue(stripped.endsWith("}"))
     }
+
+    @Test
+    fun parseSummaryResponse_ignoresThinkingParts() {
+        val responseWithThought = """
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "thought": true,
+                    "text": "Let me analyze the audio carefully..."
+                  },
+                  {
+                    "text": "{\"patientName\":\"李美華\",\"patientIdentifier\":\"B223456789\",\"identifierType\":\"身分證字號\",\"caseManagerName\":\"黃個管師\",\"callerRelation\":\"病人本人\",\"inquiryCategory\":\"用藥諮詢\",\"urgencyLevel\":\"一般\",\"summary\":\"【來電者身分】病人本人\\n• 詢問標靶藥物漏吃處理\",\"actionItems\":[],\"transcript\":\"[00:01] 個管師：您好\"}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+        """.trimIndent()
+
+        val parsed = GeminiResponseParser.parseSummaryResponse(responseWithThought)
+        assertEquals("李美華", parsed.patientName)
+        assertEquals("病人本人", parsed.callerRelation)
+        assertEquals("黃個管師", parsed.caseManagerName)
+    }
 }

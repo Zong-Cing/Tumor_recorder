@@ -109,8 +109,8 @@ class InCallActivity : ComponentActivity() {
                 LaunchedEffect(callState, pendingConfirmId, hadRecordingInThisSession) {
                     val callEnded = callState == null || callState?.state == Call.STATE_DISCONNECTED
                     if (callEnded && pendingConfirmId == null) {
-                        // If we were recording, give finishRecording() a short window to flush AAC & emit pendingConfirmId
-                        delay(if (hadRecordingInThisSession) 1800L else 400L)
+                        // If we were recording, give finishRecording() time to run 2-pass mastering & emit pendingConfirmId
+                        delay(if (hadRecordingInThisSession) 3000L else 400L)
                         if (!isFinishing &&
                             CallManager.callState.value == null &&
                             CallRecordingService.pendingConfirmRecordId.value == null

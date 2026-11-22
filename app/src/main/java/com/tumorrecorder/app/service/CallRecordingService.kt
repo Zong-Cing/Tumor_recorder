@@ -153,25 +153,37 @@ class CallRecordingService : Service() {
         val a11yTag = if (CallRecorderAccessibilityService.isServiceEnabled(this)) "無障礙已啟用" else "無障礙未啟用"
         val boostLevel = settings.voiceBoostLevel
 
-        // Primary path: AudioRecord + disabled software AEC/NS + lookahead DRC/AGC + AAC MediaCodec
-        var usedSource: RecordingAudioSource? = startPcmAacRecorder(
-            file = file,
-            preferredSource = settings.audioSource,
-            boostLevel = boostLevel,
-            fromPhoneCall = fromPhoneCall,
-            a11yTag = a11yTag
-        )
-        var engineTag = if (boostLevel == VoiceBoostLevel.OFF) "PCM-AAC" else "遠端增強 ${boostLevel.shortLabel}"
+        var usedSource: RecordingAudioSource? = null
+        var engineTag: String
 
-        // Fallback path: standard MediaRecorder if AudioRecord/MediaCodec fails on this device
-        if (usedSource == null) {
-            Log.w(TAG, "PcmAacRecorder unavailable; falling back to MediaRecorder")
+        if (boostLevel == VoiceBoostLevel.OFF) {
+            // Pure native MediaRecorder preserves Samsung's untouched hardware AEC & noise suppression
             usedSource = startMediaRecorder(
                 file = file,
                 preferredSource = settings.audioSource,
                 fromPhoneCall = fromPhoneCall
             )
-            engineTag = "MediaRecorder 備援"
+            engineTag = "原生錄音（保留系統降噪）"
+        } else {
+            // Primary enhanced path: Stereo Dual-Mic AudioRecord (native NS on) + 2-Pass Post-Call Mastering
+            usedSource = startPcmAacRecorder(
+                file = file,
+                preferredSource = settings.audioSource,
+                boostLevel = boostLevel,
+                fromPhoneCall = fromPhoneCall,
+                a11yTag = a11yTag
+            )
+            engineTag = "雙段降噪增強 ${boostLevel.shortLabel}"
+
+            if (usedSource == null) {
+                Log.w(TAG, "PcmAacRecorder unavailable; falling back to MediaRecorder")
+                usedSource = startMediaRecorder(
+                    file = file,
+                    preferredSource = settings.audioSource,
+                    fromPhoneCall = fromPhoneCall
+                )
+                engineTag = "MediaRecorder 備援"
+            }
         }
 
         if (usedSource == null) {
@@ -253,10 +265,17 @@ class CallRecordingService : Service() {
             onTelemetry = { telemetry ->
                 val current = _recordingState.value
                 if (current.isRecording) {
+                    val micSuffix = if (telemetry.isDualMic) "・雙麥收音" else ""
+                    val updatedBoostLabel = if (micSuffix.isNotEmpty() && !current.boostLabel.contains("雙麥")) {
+                        current.boostLabel + micSuffix
+                    } else {
+                        current.boostLabel
+                    }
                     _recordingState.value = current.copy(
                         inputLevel = telemetry.inputLevelNormalized,
                         appliedGainDb = telemetry.appliedGainDb,
-                        isSilencedWarning = telemetry.isSilencedWarning
+                        isSilencedWarning = telemetry.isSilencedWarning,
+                        boostLabel = updatedBoostLabel
                     )
                 }
             }
@@ -399,11 +418,17 @@ class CallRecordingService : Service() {
 
             var stopSucceeded = false
             var failureReason: String? = null
+            var finalFile = file
+            var finalMime = "audio/mp4"
 
             if (activePcmRecorder != null) {
                 val summary = runCatching { activePcmRecorder.stop() }.getOrNull()
                 stopSucceeded = summary?.success == true
                 failureReason = summary?.failureReason
+                if (summary != null) {
+                    finalFile = summary.finalFile
+                    finalMime = summary.finalMimeType
+                }
             } else if (activeMediaRecorder != null) {
                 stopSucceeded = runCatching {
                     activeMediaRecorder.stop()
@@ -418,13 +443,13 @@ class CallRecordingService : Service() {
             }
 
             val repo = app.container.callRecordRepository
-            val fileBytes = if (file != null && file.exists()) file.length() else 0L
+            val fileBytes = if (finalFile != null && finalFile.exists()) finalFile.length() else 0L
             Log.i(
                 TAG,
-                "finishRecording: stopSucceeded=$stopSucceeded recordId=$recordId bytes=$fileBytes elapsed=${elapsed}s reason=$failureReason"
+                "finishRecording: stopSucceeded=$stopSucceeded recordId=$recordId mime=$finalMime bytes=$fileBytes elapsed=${elapsed}s reason=$failureReason"
             )
 
-            if (stopSucceeded && file != null && file.exists() && fileBytes > 1024L) {
+            if (stopSucceeded && finalFile != null && finalFile.exists() && fileBytes > 1024L) {
                 val finalId = if (recordId != null) {
                     val existing = repo.getRecord(recordId)
                     if (existing != null) {
@@ -432,8 +457,8 @@ class CallRecordingService : Service() {
                             existing.copy(
                                 phoneNumber = existing.phoneNumber.ifBlank { phoneNumber },
                                 durationSeconds = elapsed,
-                                audioFilePath = file.absolutePath,
-                                audioMimeType = "audio/mp4",
+                                audioFilePath = finalFile.absolutePath,
+                                audioMimeType = finalMime,
                                 patientName = existing.patientName.ifBlank { quickPatient },
                                 patientIdentifier = existing.patientIdentifier.ifBlank { quickId },
                                 caseManagerName = existing.caseManagerName.ifBlank { quickCm },
@@ -449,8 +474,8 @@ class CallRecordingService : Service() {
                                 direction = direction.name,
                                 startedAtMillis = startMillis,
                                 durationSeconds = elapsed,
-                                audioFilePath = file.absolutePath,
-                                audioMimeType = "audio/mp4",
+                                audioFilePath = finalFile.absolutePath,
+                                audioMimeType = finalMime,
                                 patientName = quickPatient,
                                 patientIdentifier = quickId,
                                 caseManagerName = quickCm,
@@ -465,8 +490,8 @@ class CallRecordingService : Service() {
                             direction = direction.name,
                             startedAtMillis = startMillis,
                             durationSeconds = elapsed,
-                            audioFilePath = file.absolutePath,
-                            audioMimeType = "audio/mp4",
+                            audioFilePath = finalFile.absolutePath,
+                            audioMimeType = finalMime,
                             patientName = quickPatient,
                             patientIdentifier = quickId,
                             caseManagerName = quickCm,
@@ -488,7 +513,7 @@ class CallRecordingService : Service() {
                 if (recordId != null) {
                     repo.getRecord(recordId)?.let { repo.deleteRecord(it) }
                 }
-                file?.let { runCatching { it.delete() } }
+                finalFile?.let { runCatching { it.delete() } }
                 val msg = "錄音存檔未完成（長度 ${elapsed}s / ${fileBytes} bytes${if (!failureReason.isNullOrBlank()) "：$failureReason" else ""}）"
                 Log.w(TAG, msg)
                 _recordingState.value = RecordingState(isRecording = false, errorMessage = msg)

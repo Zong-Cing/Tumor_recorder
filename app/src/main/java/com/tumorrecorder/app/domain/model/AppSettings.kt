@@ -20,19 +20,19 @@ enum class VoiceBoostLevel(
         label = "關閉（原始音量）",
         shortLabel = "關閉",
         maxBoostDb = 0.0,
-        description = "不做軟體音量增強，完全保留麥克風原始錄音大小"
+        description = "不做濾波與音量增強，完全保留麥克風原始錄音"
     ),
     STANDARD(
-        label = "標準增強（最高 +18 dB）",
-        shortLabel = "標準 +18dB",
-        maxBoostDb = 18.0,
-        description = "自動放大對方小聲語音（約 8 倍）並限制本端爆音，適合安靜環境"
+        label = "標準增強（雙段降噪・最高 +24 dB）",
+        shortLabel = "標準 +24dB",
+        maxBoostDb = 24.0,
+        description = "掛斷後自動執行語音帶通濾波（250–3800Hz）＋底噪抑制＋雙段均衡（最高 16 倍），適合開擴音或安靜環境"
     ),
     STRONG(
-        label = "強力增強（最高 +30 dB・推薦）",
-        shortLabel = "強力 +30dB",
-        maxBoostDb = 30.0,
-        description = "針對聽筒通話遠端極小聲強化動態壓縮與自動增益（最高約 31 倍），同時限制本端不破音"
+        label = "強力增強（雙段降噪・最高 +38 dB・推薦）",
+        shortLabel = "強力 +38dB",
+        maxBoostDb = 38.0,
+        description = "掛斷後分析整段底噪並進行人聲帶通濾波、雙麥自適應與前瞻平滑增益（最高 80 倍），專為聽筒遠端小聲打造"
     );
 
     companion object {

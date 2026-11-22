@@ -60,7 +60,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tumorrecorder.app.domain.model.AiProvider
 import com.tumorrecorder.app.domain.model.AppSettings
 import com.tumorrecorder.app.domain.model.RecordingAudioSource
-import com.tumorrecorder.app.domain.model.VoiceBoostLevel
 import com.tumorrecorder.app.ui.theme.MedicalTeal
 import com.tumorrecorder.app.ui.theme.MedicalTealLight
 import com.tumorrecorder.app.ui.theme.SuccessGreen
@@ -209,25 +208,6 @@ fun SettingsScreen(
                     )
                 }
 
-                Text("遠端小聲自動增強（動態壓縮 DRC + 自動增益 AGC）", style = MaterialTheme.typography.titleSmall)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    VoiceBoostLevel.entries.forEach { level ->
-                        FilterChip(
-                            selected = settings.voiceBoostLevel == level,
-                            onClick = { viewModel.update { it.copy(voiceBoostLevel = level) } },
-                            label = { Text(level.shortLabel) }
-                        )
-                    }
-                }
-                Text(
-                    text = "${settings.voiceBoostLevel.label}：${settings.voiceBoostLevel.description}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MedicalTeal
-                )
-
                 Text("通話錄音音源（建議固定選 VOICE_RECOGNITION）", style = MaterialTheme.typography.titleSmall)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -269,16 +249,8 @@ fun SettingsScreen(
                     )
                 }
                 SettingToggleRow(
-                    title = "錄音通話時自動拉高聽筒音量（推薦）",
-                    subtitle = "開始錄音時暫時將通話聽筒音量調至 90%～100% 以提升麥克風收音，掛斷後自動恢復原本音量",
-                    checked = settings.boostCallVolumeOnRecord,
-                    onCheckedChange = { enabled ->
-                        viewModel.update { it.copy(boostCallVolumeOnRecord = enabled) }
-                    }
-                )
-                SettingToggleRow(
-                    title = "通話接通時自動開啟擴音（最清晰雙向錄音）",
-                    subtitle = "若處於私密辦公空間，開啟擴音可讓對方聲音大幅清晰；通話畫面內也可隨時一鍵切換擴音",
+                    title = "通話接通時自動開啟擴音（選用）",
+                    subtitle = "若處於私密空間可開啟；在開放辦公室建議維持關閉，改採「個管師口頭複述＋通話後口述補充摘要」模式",
                     checked = settings.autoEnableSpeakerOnCall,
                     onCheckedChange = { enabled ->
                         viewModel.update { it.copy(autoEnableSpeakerOnCall = enabled) }

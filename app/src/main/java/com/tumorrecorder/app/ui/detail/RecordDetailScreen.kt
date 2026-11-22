@@ -232,8 +232,22 @@ fun RecordDetailScreen(
                 }
             }
 
-            // Audio playback card
+            // Audio playback card (original call recording)
             AudioPlayerCard(audioPath = current.audioFilePath)
+
+            // Post-call voice supplement memo card (independent recording, playback, re-record, delete)
+            com.tumorrecorder.app.ui.components.SupplementVoiceMemoCard(
+                recordId = current.id,
+                recordingsDir = viewModel.recordingsDir,
+                supplementAudioPath = current.supplementAudioFilePath,
+                supplementDurationSeconds = current.supplementDurationSeconds,
+                onSaveSupplement = { file, duration ->
+                    viewModel.saveSupplementAudio(file, duration)
+                },
+                onClearSupplement = {
+                    viewModel.clearSupplementAudio()
+                }
+            )
 
             // Patient & Oncology Case Manager Info Card
             Card(
@@ -649,6 +663,11 @@ private fun AudioPlayerCard(audioPath: String) {
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            Text(
+                text = "原始通話錄音",
+                style = MaterialTheme.typography.titleSmall,
+                color = MedicalTeal
+            )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)

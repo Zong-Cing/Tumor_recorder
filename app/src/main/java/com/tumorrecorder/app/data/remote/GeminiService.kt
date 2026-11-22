@@ -50,30 +50,43 @@ class GeminiService(
         phoneNumber: String?,
         callTimeDisplay: String,
         settings: AppSettings,
-        promptTemplate: PromptTemplateEntity? = null
+        promptTemplate: PromptTemplateEntity? = null,
+        supplementAudioFile: File? = null
     ): OncologySummaryResult = withContext(Dispatchers.IO) {
         val apiKey = settings.geminiApiKey.trim()
         require(apiKey.isNotEmpty()) { "尚未設定 Gemini API Key，請先至「設定」頁面填入。" }
         require(audioFile.exists() && audioFile.length() > 0L) { "找不到有效的錄音檔案。" }
 
-        val uploaded = uploadAudioFile(audioFile, mimeType, apiKey)
+        val validSupplement = supplementAudioFile?.takeIf { it.exists() && it.length() > 0L }
+        val uploadedMain = uploadAudioFile(audioFile, mimeType, apiKey)
+        var uploadedSupplement: UploadedGeminiFile? = null
         try {
-            waitUntilFileActive(uploaded.name, apiKey)
+            if (validSupplement != null) {
+                uploadedSupplement = uploadAudioFile(validSupplement, "audio/mp4", apiKey)
+            }
+            waitUntilFileActive(uploadedMain.name, apiKey)
+            uploadedSupplement?.let { waitUntilFileActive(it.name, apiKey) }
+
             val prompt = PromptBuilder.buildFromTemplate(
                 template = promptTemplate,
                 phoneNumber = phoneNumber,
                 callTimeDisplay = callTimeDisplay,
-                settings = settings
+                settings = settings,
+                hasSupplementAudio = uploadedSupplement != null
             )
             generateStructuredSummary(
-                fileUri = uploaded.uri,
+                fileUri = uploadedMain.uri,
                 mimeType = mimeType,
+                supplementFileUri = uploadedSupplement?.uri,
                 prompt = prompt,
                 model = settings.geminiModel,
                 apiKey = apiKey
             )
         } finally {
-            runCatching { deleteUploadedFile(uploaded.name, apiKey) }
+            runCatching { deleteUploadedFile(uploadedMain.name, apiKey) }
+            uploadedSupplement?.let { sup ->
+                runCatching { deleteUploadedFile(sup.name, apiKey) }
+            }
         }
     }
 
@@ -186,6 +199,7 @@ class GeminiService(
     private suspend fun generateStructuredSummary(
         fileUri: String,
         mimeType: String,
+        supplementFileUri: String?,
         prompt: String,
         model: String,
         apiKey: String
@@ -201,12 +215,28 @@ class GeminiService(
             put("contents", buildJsonArray {
                 add(buildJsonObject {
                     put("parts", buildJsonArray {
+                        if (supplementFileUri != null) {
+                            add(buildJsonObject {
+                                put("text", "【音檔 1：原始通話錄音】")
+                            })
+                        }
                         add(buildJsonObject {
                             put("file_data", buildJsonObject {
                                 put("mime_type", mimeType)
                                 put("file_uri", fileUri)
                             })
                         })
+                        if (supplementFileUri != null) {
+                            add(buildJsonObject {
+                                put("text", "【音檔 2：個管師通話結束後的口述補充摘要（請作為最高優先權核對依據）】")
+                            })
+                            add(buildJsonObject {
+                                put("file_data", buildJsonObject {
+                                    put("mime_type", "audio/mp4")
+                                    put("file_uri", supplementFileUri)
+                                })
+                            })
+                        }
                         add(buildJsonObject {
                             put("text", prompt)
                         })

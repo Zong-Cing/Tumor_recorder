@@ -73,13 +73,30 @@ class RecordDetailViewModel(
         }
     }
 
+    val recordingsDir: java.io.File
+        get() = container.callRecordRepository.ensureRecordingsDir()
+
+    fun saveSupplementAudio(file: java.io.File, durationSeconds: Long) {
+        viewModelScope.launch {
+            container.callRecordRepository.saveSupplementAudio(recordId, file, durationSeconds)
+            _message.value = "已儲存口述補充摘要，點「更換 Prompt 重分析」即可合併整合至 AI 摘要"
+        }
+    }
+
+    fun clearSupplementAudio() {
+        viewModelScope.launch {
+            container.callRecordRepository.clearSupplementAudio(recordId)
+            _message.value = "已刪除口述補充錄音"
+        }
+    }
+
     fun reAnalyze(promptTemplateId: Long = -1L) {
         container.callRecordRepository.enqueueProcessing(
             recordId = recordId,
             promptTemplateId = promptTemplateId,
             forceSendEmail = false
         )
-        _message.value = "已使用選定 Prompt 排程重新進行 Gemini AI 轉錄與摘要"
+        _message.value = "已使用選定 Prompt 排程重新進行 AI 轉錄與摘要"
     }
 
     fun resendEmail() {

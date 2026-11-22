@@ -57,15 +57,26 @@ class EmailService {
         }
 
         val audioFile = record.audioFilePath.takeIf { it.isNotBlank() }?.let(::File)
-        if (settings.attachAudioToEmail && audioFile != null && audioFile.exists() && audioFile.length() > 0L) {
+            ?.takeIf { it.exists() && it.length() > 0L }
+        val supplementFile = record.supplementAudioFilePath.takeIf { it.isNotBlank() }?.let(::File)
+            ?.takeIf { it.exists() && it.length() > 0L }
+        if (settings.attachAudioToEmail && (audioFile != null || supplementFile != null)) {
             val mixed = MimeMultipart("mixed").apply {
                 addBodyPart(MimeBodyPart().apply {
                     setContent(alternativePart)
                 })
-                addBodyPart(MimeBodyPart().apply {
-                    dataHandler = DataHandler(FileDataSource(audioFile))
-                    fileName = MimeUtility.encodeText(audioFile.name, "UTF-8", null)
-                })
+                audioFile?.let { file ->
+                    addBodyPart(MimeBodyPart().apply {
+                        dataHandler = DataHandler(FileDataSource(file))
+                        fileName = MimeUtility.encodeText(file.name, "UTF-8", null)
+                    })
+                }
+                supplementFile?.let { file ->
+                    addBodyPart(MimeBodyPart().apply {
+                        dataHandler = DataHandler(FileDataSource(file))
+                        fileName = MimeUtility.encodeText(file.name, "UTF-8", null)
+                    })
+                }
             }
             message.setContent(mixed)
         } else {

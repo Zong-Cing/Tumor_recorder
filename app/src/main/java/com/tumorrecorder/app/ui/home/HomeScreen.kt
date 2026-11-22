@@ -396,14 +396,28 @@ fun HomeScreen(
                         selectedTemplateId = selectedPromptId,
                         onSelect = { selectedPromptId = it }
                     )
-                    TextButton(
-                        onClick = {
-                            viewModel.dismissConfirmKeepRecord()
-                            onOpenPrompts()
-                        },
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("編輯或新增 Prompt 範本 →")
+                        TextButton(
+                            onClick = {
+                                viewModel.dismissConfirmKeepRecord()
+                                onOpenRecord(confirmRecord.id)
+                            },
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                        ) {
+                            Text("先補錄口述摘要 →")
+                        }
+                        TextButton(
+                            onClick = {
+                                viewModel.dismissConfirmKeepRecord()
+                                onOpenPrompts()
+                            },
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                        ) {
+                            Text("管理 Prompt →")
+                        }
                     }
                 }
             },
@@ -960,10 +974,18 @@ private fun CallRecordItemCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val supplementTag = if (record.hasSupplementAudio) {
+                    " ・ 含口述補充(${EmailFormatter.formatDuration(record.supplementDurationSeconds)})"
+                } else {
+                    ""
+                }
                 Text(
-                    text = "${EmailFormatter.formatShortTimestamp(record.startedAtMillis)} ・ ${record.callDirection.label} ・ ${EmailFormatter.formatDuration(record.durationSeconds)}",
+                    text = "${EmailFormatter.formatShortTimestamp(record.startedAtMillis)} ・ ${record.callDirection.label} ・ ${EmailFormatter.formatDuration(record.durationSeconds)}$supplementTag",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
 
                 Row(

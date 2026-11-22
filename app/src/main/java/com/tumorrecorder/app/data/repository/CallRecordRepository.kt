@@ -46,7 +46,37 @@ class CallRecordRepository(
         if (record.audioFilePath.isNotBlank()) {
             runCatching { File(record.audioFilePath).delete() }
         }
+        if (record.supplementAudioFilePath.isNotBlank()) {
+            runCatching { File(record.supplementAudioFilePath).delete() }
+        }
         dao.delete(record)
+    }
+
+    suspend fun saveSupplementAudio(recordId: Long, file: File, durationSeconds: Long) = withContext(Dispatchers.IO) {
+        val existing = dao.getById(recordId) ?: return@withContext
+        val oldPath = existing.supplementAudioFilePath
+        if (oldPath.isNotBlank() && oldPath != file.absolutePath) {
+            runCatching { File(oldPath).delete() }
+        }
+        dao.update(
+            existing.copy(
+                supplementAudioFilePath = file.absolutePath,
+                supplementDurationSeconds = durationSeconds
+            )
+        )
+    }
+
+    suspend fun clearSupplementAudio(recordId: Long) = withContext(Dispatchers.IO) {
+        val existing = dao.getById(recordId) ?: return@withContext
+        if (existing.supplementAudioFilePath.isNotBlank()) {
+            runCatching { File(existing.supplementAudioFilePath).delete() }
+        }
+        dao.update(
+            existing.copy(
+                supplementAudioFilePath = "",
+                supplementDurationSeconds = 0L
+            )
+        )
     }
 
     /**

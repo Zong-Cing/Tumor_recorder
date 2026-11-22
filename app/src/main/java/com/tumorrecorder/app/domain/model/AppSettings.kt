@@ -10,60 +10,29 @@ enum class AiProvider(val label: String) {
     }
 }
 
-enum class VoiceBoostLevel(
-    val label: String,
-    val shortLabel: String,
-    val maxBoostDb: Double,
-    val description: String
-) {
-    OFF(
-        label = "關閉（原始音量）",
-        shortLabel = "關閉",
-        maxBoostDb = 0.0,
-        description = "不做濾波與音量增強，完全保留麥克風原始錄音"
-    ),
-    STANDARD(
-        label = "標準增強（雙段降噪・最高 +24 dB）",
-        shortLabel = "標準 +24dB",
-        maxBoostDb = 24.0,
-        description = "掛斷後自動執行語音帶通濾波（250–3800Hz）＋底噪抑制＋雙段均衡（最高 16 倍），適合開擴音或安靜環境"
-    ),
-    STRONG(
-        label = "強力增強（雙段降噪・最高 +38 dB・推薦）",
-        shortLabel = "強力 +38dB",
-        maxBoostDb = 38.0,
-        description = "掛斷後分析整段底噪並進行人聲帶通濾波、雙麥自適應與前瞻平滑增益（最高 80 倍），專為聽筒遠端小聲打造"
-    );
-
-    companion object {
-        fun fromName(name: String?): VoiceBoostLevel =
-            entries.firstOrNull { it.name == name } ?: STRONG
-    }
-}
-
 enum class RecordingAudioSource(
     val label: String,
     val description: String
 ) {
     VOICE_RECOGNITION(
-        label = "VOICE_RECOGNITION（三星／無障礙首選）",
-        description = "Android 唯一開放給無障礙服務於通話中不被靜音的音源！建議固定選用此項並搭配「強力 +30dB 遠端增強」"
-    ),
-    CAMCORDER(
-        label = "CAMCORDER（頂部麥克風・僅部分機型）",
-        description = "部分機型可啟用靠近聽筒的頂部麥克風；但三星通話中可能被系統靜音（若偵測無聲將自動切回 VOICE_RECOGNITION）"
+        label = "VOICE_RECOGNITION（三星／無障礙推薦）",
+        description = "Android 開放給無障礙服務於通話中不被靜音的音源，搭配原生系統降噪錄製個管師端最清晰"
     ),
     VOICE_COMMUNICATION(
         label = "VOICE_COMMUNICATION（通話通訊）",
-        description = "語音通話音源，系統通常會開回音消除，若偵測被系統靜音將自動切回 VOICE_RECOGNITION"
+        description = "語音通話音源，若無障礙音源異常可改試此項"
     ),
     MIC(
         label = "MIC（主麥克風）",
-        description = "標準麥克風，適合非通話之面對面錄音；通話中若被系統靜音將自動切回 VOICE_RECOGNITION"
+        description = "標準麥克風，適合面對面諮詢或開擴音錄音"
+    ),
+    CAMCORDER(
+        label = "CAMCORDER（頂部麥克風）",
+        description = "部分機型啟用頂部麥克風，部分三星機型通話中可能被系統靜音"
     ),
     UNPROCESSED(
-        label = "UNPROCESSED（原始未處理・三星通話易靜音）",
-        description = "未經處理的原始音訊，多數三星機型在通話中會被 Android 強制靜音（若無聲會自動切回 VOICE_RECOGNITION）"
+        label = "UNPROCESSED（原始未處理）",
+        description = "未經處理的原始音訊，多數三星機型在通話中會被系統靜音"
     );
 
     companion object {
@@ -76,8 +45,6 @@ data class AppSettings(
     val onlyAnalyzeAppCalls: Boolean = true,
     val autoRecordCalls: Boolean = false,
     val autoEnableSpeakerOnCall: Boolean = false,
-    val boostCallVolumeOnRecord: Boolean = true,
-    val voiceBoostLevel: VoiceBoostLevel = VoiceBoostLevel.STRONG,
     val audioSource: RecordingAudioSource = RecordingAudioSource.VOICE_RECOGNITION,
     val autoAnalyzeAfterCall: Boolean = false,
     val autoSendEmailAfterSummary: Boolean = true,

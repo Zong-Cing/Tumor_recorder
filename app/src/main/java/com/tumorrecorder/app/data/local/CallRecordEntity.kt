@@ -15,6 +15,8 @@ data class CallRecordEntity(
     val durationSeconds: Long = 0L,
     val audioFilePath: String = "",
     val audioMimeType: String = "audio/mp4",
+    val supplementAudioFilePath: String = "",
+    val supplementDurationSeconds: Long = 0L,
     val status: String = ProcessingStatus.PENDING.name,
     // Oncology case management structured fields
     val patientName: String = "",
@@ -39,6 +41,9 @@ data class CallRecordEntity(
 
     val callDirection: CallDirection
         get() = CallDirection.fromName(direction)
+
+    val hasSupplementAudio: Boolean
+        get() = supplementAudioFilePath.isNotBlank()
 
     fun actionItemsList(): List<String> =
         actionItemsText

@@ -124,7 +124,15 @@ class CallProcessingWorker(
 
         val audioFile = File(record.audioFilePath)
         val audioLength = if (audioFile.exists()) audioFile.length() else 0L
-        Log.i(TAG, "Loaded recordId=$recordId provider=${settings.aiProvider.name} audio=${audioFile.absolutePath} bytes=$audioLength")
+        val supplementFile = record.supplementAudioFilePath
+            .takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?.takeIf { it.exists() && it.length() > 0L }
+        Log.i(
+            TAG,
+            "Loaded recordId=$recordId provider=${settings.aiProvider.name} audio=${audioFile.absolutePath} " +
+                "bytes=$audioLength hasSupplement=${supplementFile != null} supplementBytes=${supplementFile?.length() ?: 0L}"
+        )
         if (!audioFile.exists() || audioLength == 0L) {
             Log.e(TAG, "Audio file missing or empty for recordId=$recordId path=${record.audioFilePath}")
             repo.updateRecord(
@@ -162,7 +170,8 @@ class CallProcessingWorker(
                         phoneNumber = record.phoneNumber,
                         callTimeDisplay = callTimeDisplay,
                         settings = settings,
-                        promptTemplate = chosenTemplate
+                        promptTemplate = chosenTemplate,
+                        supplementAudioFile = supplementFile
                     )
                 }
                 com.tumorrecorder.app.domain.model.AiProvider.GEMINI -> {
@@ -172,7 +181,8 @@ class CallProcessingWorker(
                         phoneNumber = record.phoneNumber,
                         callTimeDisplay = callTimeDisplay,
                         settings = settings,
-                        promptTemplate = chosenTemplate
+                        promptTemplate = chosenTemplate,
+                        supplementAudioFile = supplementFile
                     )
                 }
             }
@@ -236,7 +246,12 @@ class CallProcessingWorker(
 
             if (settings.deleteAudioAfterEmailSent) {
                 runCatching { audioFile.delete() }
-                finalRecord = finalRecord.copy(audioFilePath = "")
+                supplementFile?.let { runCatching { it.delete() } }
+                finalRecord = finalRecord.copy(
+                    audioFilePath = "",
+                    supplementAudioFilePath = "",
+                    supplementDurationSeconds = 0L
+                )
             }
 
             repo.updateRecord(finalRecord)

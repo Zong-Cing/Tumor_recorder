@@ -54,4 +54,25 @@ class PromptBuilderTest {
         assertTrue(prompt.contains("使用分析範本：乳癌術後追蹤自訂範本"))
         assertTrue(prompt.contains("JSON Schema"))
     }
+
+    @Test
+    fun buildFromTemplate_includesDualAudioAndSubstituteCaseManagerInstructions() {
+        val template = com.tumorrecorder.app.domain.DefaultPromptTemplates.initialTemplates().first()
+        val settings = AppSettings(defaultCaseManagerUnit = "腫瘤個管中心")
+
+        val prompt = PromptBuilder.buildFromTemplate(
+            template = template,
+            phoneNumber = "0912345678",
+            callTimeDisplay = "2026/11/22 09:30:00",
+            settings = settings,
+            hasSupplementAudio = true
+        )
+
+        assertTrue(prompt.contains("單端收音"))
+        assertTrue(prompt.contains("代班接聽"))
+        assertTrue(prompt.contains("負責個管師本人"))
+        assertTrue(prompt.contains("雙音檔整合說明"))
+        assertTrue(prompt.contains("通話後口述補充"))
+        assertTrue(prompt.contains("【個管師口述補充】"))
+    }
 }

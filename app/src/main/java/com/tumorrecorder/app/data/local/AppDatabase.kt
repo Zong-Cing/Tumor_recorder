@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CallRecordEntity::class,
         PromptTemplateEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -44,6 +44,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE call_records ADD COLUMN supplementAudioFilePath TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    "ALTER TABLE call_records ADD COLUMN supplementDurationSeconds INTEGER NOT NULL DEFAULT 0"
+                )
+                // Seed the new single-sided read-back template once for existing users without disturbing custom templates
+                val t = com.tumorrecorder.app.domain.DefaultPromptTemplates.singleSideReadbackTemplate()
+                db.execSQL("UPDATE prompt_templates SET isDefault = 0")
+                db.execSQL(
+                    """
+                    INSERT INTO prompt_templates (name, description, promptContent, isDefault, updatedAtMillis)
+                    VALUES (?, ?, ?, 1, ?)
+                    """.trimIndent(),
+                    arrayOf<Any>(t.name, t.description, t.promptContent, t.updatedAtMillis)
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -51,7 +72,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "tumor_recorder.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

@@ -109,8 +109,8 @@ class InCallActivity : ComponentActivity() {
                 LaunchedEffect(callState, pendingConfirmId, hadRecordingInThisSession) {
                     val callEnded = callState == null || callState?.state == Call.STATE_DISCONNECTED
                     if (callEnded && pendingConfirmId == null) {
-                        // If we were recording, give finishRecording() time to run 2-pass mastering & emit pendingConfirmId
-                        delay(if (hadRecordingInThisSession) 3000L else 400L)
+                        // Give finishRecording() a short window to flush MediaRecorder and emit pendingConfirmId
+                        delay(if (hadRecordingInThisSession) 1500L else 400L)
                         if (!isFinishing &&
                             CallManager.callState.value == null &&
                             CallRecordingService.pendingConfirmRecordId.value == null
@@ -298,8 +298,6 @@ private fun InCallScreenContent(
                     }
 
                     if (recordingState.isRecording) {
-                        val levelFraction = recordingState.inputLevel.coerceIn(0f, 1f)
-                        val gainInt = recordingState.appliedGainDb.toInt()
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -307,55 +305,19 @@ private fun InCallScreenContent(
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(Color.White.copy(alpha = 0.08f))
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "${recordingState.activeAudioSourceLabel.substringBefore(" ")}・${recordingState.boostLabel}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF99F6E4)
-                                )
-                                Text(
-                                    text = if (gainInt > 0) "即時增益 +${gainInt} dB" else "即時收音中",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFFE2E8F0)
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(5.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(Color.White.copy(alpha = 0.15f))
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(levelFraction)
-                                        .height(5.dp)
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(
-                                            if (recordingState.isSilencedWarning) Color(0xFFF59E0B) else Color(0xFF34D399)
-                                        )
-                                )
-                            }
-                            recordingState.audioNotice?.let { notice ->
-                                Text(
-                                    text = notice,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFFFDE68A)
-                                )
-                            }
-                            if (recordingState.isSilencedWarning) {
-                                Text(
-                                    text = "偵測目前未收到聲音：請確認「無障礙錄音服務」已開啟，或點下方「擴音」輔助收音",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFFFBBF24)
-                                )
-                            }
+                            Text(
+                                text = "口頭複述提示（免擴音單端清晰模式）",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF99F6E4)
+                            )
+                            Text(
+                                text = "建議自然複述：身分(本人/家屬) · 負責/代班接聽 · 姓名/病歷號 · 症狀數值與衛教待辦（掛斷後亦可補錄口述摘要）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFE2E8F0)
+                            )
                         }
                     }
                 }
@@ -637,6 +599,7 @@ private fun PostCallAnalysisPromptScreen(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as TumorRecorderApp
+    val scope = rememberCoroutineScope()
     val record by app.container.callRecordRepository
         .observeRecord(recordId)
         .collectAsStateWithLifecycle(initialValue = null)
@@ -645,6 +608,8 @@ private fun PostCallAnalysisPromptScreen(
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
     var selectedPromptId by remember { mutableStateOf<Long?>(null) }
+    var isRecordingMemo by remember { mutableStateOf(false) }
+
     LaunchedEffect(templates) {
         if (selectedPromptId == null && templates.isNotEmpty()) {
             selectedPromptId = (templates.firstOrNull { it.isDefault } ?: templates.first()).id
@@ -684,6 +649,27 @@ private fun PostCallAnalysisPromptScreen(
                     )
                 }
 
+                com.tumorrecorder.app.ui.components.SupplementVoiceMemoCard(
+                    recordId = recordId,
+                    recordingsDir = app.container.callRecordRepository.ensureRecordingsDir(),
+                    supplementAudioPath = info?.supplementAudioFilePath.orEmpty(),
+                    supplementDurationSeconds = info?.supplementDurationSeconds ?: 0L,
+                    compact = true,
+                    onSaveSupplement = { file, duration ->
+                        scope.launch {
+                            app.container.callRecordRepository.saveSupplementAudio(recordId, file, duration)
+                        }
+                    },
+                    onClearSupplement = {
+                        scope.launch {
+                            app.container.callRecordRepository.clearSupplementAudio(recordId)
+                        }
+                    },
+                    onRecordingStateChange = { recording ->
+                        isRecordingMemo = recording
+                    }
+                )
+
                 Text(
                     text = "請選擇要使用的分析 Prompt：",
                     style = MaterialTheme.typography.titleSmall,
@@ -700,14 +686,24 @@ private fun PostCallAnalysisPromptScreen(
 
                 Button(
                     onClick = { onAnalyzeNow(selectedPromptId ?: -1L) },
+                    enabled = !isRecordingMemo,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = MedicalTeal)
                 ) {
-                    Text("使用此 Prompt 開始分析並寄信")
+                    Text(
+                        if (isRecordingMemo) {
+                            "請先停止口述補充錄音再開始分析"
+                        } else if (info?.hasSupplementAudio == true) {
+                            "合併口述補充並開始 AI 分析"
+                        } else {
+                            "使用此 Prompt 開始分析並寄信"
+                        }
+                    )
                 }
 
                 FilledTonalButton(
                     onClick = onKeepForLater,
+                    enabled = !isRecordingMemo,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("暫不分析（保留錄音，稍後決定）")
@@ -715,6 +711,7 @@ private fun PostCallAnalysisPromptScreen(
 
                 TextButton(
                     onClick = onDiscardRecording,
+                    enabled = !isRecordingMemo,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("不需要，直接刪除這筆錄音", color = UrgentRed)

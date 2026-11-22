@@ -34,10 +34,6 @@ class SettingsRepository(context: Context) {
             onlyAnalyzeAppCalls = prefs.getBoolean(KEY_ONLY_APP_CALLS, true),
             autoRecordCalls = prefs.getBoolean(KEY_AUTO_RECORD, false),
             autoEnableSpeakerOnCall = prefs.getBoolean(KEY_AUTO_SPEAKER, false),
-            boostCallVolumeOnRecord = prefs.getBoolean(KEY_BOOST_CALL_VOLUME, true),
-            voiceBoostLevel = com.tumorrecorder.app.domain.model.VoiceBoostLevel.fromName(
-                prefs.getString(KEY_VOICE_BOOST_LEVEL, null)
-            ),
             audioSource = com.tumorrecorder.app.domain.model.RecordingAudioSource.fromName(
                 prefs.getString(KEY_AUDIO_SOURCE, null)
             ),
@@ -78,8 +74,6 @@ class SettingsRepository(context: Context) {
             .putBoolean(KEY_ONLY_APP_CALLS, s.onlyAnalyzeAppCalls)
             .putBoolean(KEY_AUTO_RECORD, s.autoRecordCalls)
             .putBoolean(KEY_AUTO_SPEAKER, s.autoEnableSpeakerOnCall)
-            .putBoolean(KEY_BOOST_CALL_VOLUME, s.boostCallVolumeOnRecord)
-            .putString(KEY_VOICE_BOOST_LEVEL, s.voiceBoostLevel.name)
             .putString(KEY_AUDIO_SOURCE, s.audioSource.name)
             .putBoolean(KEY_AUTO_ANALYZE, s.autoAnalyzeAfterCall)
             .putBoolean(KEY_AUTO_EMAIL, s.autoSendEmailAfterSummary)
@@ -126,8 +120,6 @@ class SettingsRepository(context: Context) {
         private const val KEY_ONLY_APP_CALLS = "only_analyze_app_calls"
         private const val KEY_AUTO_RECORD = "auto_record_calls"
         private const val KEY_AUTO_SPEAKER = "auto_enable_speaker"
-        private const val KEY_BOOST_CALL_VOLUME = "boost_call_volume_on_record"
-        private const val KEY_VOICE_BOOST_LEVEL = "voice_boost_level"
         private const val KEY_AUDIO_SOURCE = "recording_audio_source"
         private const val KEY_AUTO_ANALYZE = "auto_analyze_after_call"
         private const val KEY_AUTO_EMAIL = "auto_send_email"

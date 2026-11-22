@@ -48,33 +48,59 @@ class GroqService(
         phoneNumber: String?,
         callTimeDisplay: String,
         settings: AppSettings,
-        promptTemplate: PromptTemplateEntity? = null
+        promptTemplate: PromptTemplateEntity? = null,
+        supplementAudioFile: File? = null
     ): OncologySummaryResult = withContext(Dispatchers.IO) {
         val apiKey = settings.groqApiKey.trim()
         require(apiKey.isNotEmpty()) { "尚未設定 Groq API Key，請先至「設定」頁面填入。" }
         require(audioFile.exists() && audioFile.length() > 0L) { "找不到有效的錄音檔案。" }
 
-        // Step 1: Whisper speech-to-text
-        val rawTranscript = transcribeWithWhisper(
+        // Step 1: Whisper speech-to-text for call audio (and optional post-call supplement memo)
+        val rawCallTranscript = transcribeWithWhisper(
             audioFile = audioFile,
             mimeType = mimeType,
             sttModel = settings.groqSttModel,
             apiKey = apiKey
         )
 
+        val validSupplement = supplementAudioFile?.takeIf { it.exists() && it.length() > 0L }
+        val rawSupplementTranscript = if (validSupplement != null) {
+            transcribeWithWhisper(
+                audioFile = validSupplement,
+                mimeType = "audio/mp4",
+                sttModel = settings.groqSttModel,
+                apiKey = apiKey
+            )
+        } else {
+            ""
+        }
+
         // Step 2: Structured oncology summary using the chosen Prompt template
         val basePrompt = PromptBuilder.buildFromTemplate(
             template = promptTemplate,
             phoneNumber = phoneNumber,
             callTimeDisplay = callTimeDisplay,
-            settings = settings
+            settings = settings,
+            hasSupplementAudio = rawSupplementTranscript.isNotBlank()
         )
+
+        val combinedRawTranscript = if (rawSupplementTranscript.isNotBlank()) {
+            """
+【原始通話逐字稿】
+$rawCallTranscript
+
+【個管師通話後口述補充】
+$rawSupplementTranscript
+            """.trimIndent()
+        } else {
+            rawCallTranscript
+        }
 
         val userMessage = """
 $basePrompt
 
 【以下為 Whisper 語音轉錄之原始逐字稿，請依據此內容產出嚴格 JSON，並保留整理後的完整逐字稿於 transcript 欄位】
-$rawTranscript
+$combinedRawTranscript
         """.trimIndent()
 
         val result = summarizeWithGroqLlm(
@@ -85,7 +111,7 @@ $rawTranscript
 
         // Ensure transcript is never empty even if LLM truncated it
         if (result.transcript.isBlank()) {
-            result.copy(transcript = rawTranscript)
+            result.copy(transcript = combinedRawTranscript)
         } else {
             result
         }

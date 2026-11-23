@@ -13,3 +13,4 @@ app/build
 *.keystore
 !app/debug.keystore
 *.jks
+.kotlin/

@@ -68,6 +68,12 @@
             android:turnScreenOn="true"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Dedicated screen for searching and browsing recorded oncology consultations -->
+        <activity
+            android:name=".ui.records.ConsultationRecordsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Android Telecom InCallService (Default Phone App engine) -->
         <!-- NOTE: Do NOT set IN_CALL_SERVICE_RINGING=true, so Android Telecom plays the native system ringtone & vibration -->
         <service

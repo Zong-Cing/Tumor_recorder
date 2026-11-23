@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private var accessibilityEnabledInSettings by mutableStateOf(false)
     private var isDefaultDialer by mutableStateOf(false)
     private var canUseFullScreenIntent by mutableStateOf(true)
+    private var callLogRefreshTick by androidx.compose.runtime.mutableIntStateOf(0)
     private var openRecordId by mutableStateOf<Long?>(null)
     private var incomingDialNumber by mutableStateOf<String?>(null)
 
@@ -35,6 +36,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         hasRequiredPermissions = checkRequiredPermissions()
+        callLogRefreshTick++
     }
 
     private val defaultDialerLauncher = registerForActivityResult(
@@ -59,6 +61,7 @@ class MainActivity : ComponentActivity() {
                     onConsumeInitialRecordId = { openRecordId = null },
                     initialDialNumber = incomingDialNumber,
                     onConsumeInitialDialNumber = { incomingDialNumber = null },
+                    callLogRefreshTick = callLogRefreshTick,
                     hasRequiredPermissions = hasRequiredPermissions,
                     isAccessibilityEnabled = liveA11yConnected || accessibilityEnabledInSettings,
                     isDefaultDialer = isDefaultDialer,
@@ -67,7 +70,10 @@ class MainActivity : ComponentActivity() {
                     onRequestDefaultDialer = { requestDefaultDialerRole() },
                     onOpenFullScreenIntentSettings = { openFullScreenIntentSettings() },
                     onOpenAccessibilitySettings = { openAccessibilitySettings() },
-                    onOpenAppDetailsSettings = { openAppDetailsSettings() }
+                    onOpenAppDetailsSettings = { openAppDetailsSettings() },
+                    onOpenConsultationRecords = {
+                        startActivity(Intent(this, com.tumorrecorder.app.ui.records.ConsultationRecordsActivity::class.java))
+                    }
                 )
             }
         }
@@ -76,6 +82,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshSystemStates()
+        callLogRefreshTick++
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -158,6 +165,7 @@ class MainActivity : ComponentActivity() {
         val critical = buildList {
             add(Manifest.permission.RECORD_AUDIO)
             add(Manifest.permission.READ_PHONE_STATE)
+            add(Manifest.permission.READ_CALL_LOG)
             add(Manifest.permission.CALL_PHONE)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)

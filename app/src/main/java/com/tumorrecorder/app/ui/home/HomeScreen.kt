@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.provider.CallLog
 import android.telecom.TelecomManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,27 +28,28 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallMissed
+import androidx.compose.material.icons.automirrored.filled.CallReceived
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.FolderShared
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneInTalk
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
@@ -58,9 +60,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -90,16 +94,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.tumorrecorder.app.data.local.CallRecordEntity
+import com.tumorrecorder.app.data.local.DeviceCallLogEntry
 import com.tumorrecorder.app.data.remote.EmailFormatter
 import com.tumorrecorder.app.domain.model.AppSettings
 import com.tumorrecorder.app.domain.model.CallDirection
-import com.tumorrecorder.app.domain.model.ProcessingStatus
 import com.tumorrecorder.app.service.CallManager
 import com.tumorrecorder.app.service.CallRecordingService
 import com.tumorrecorder.app.service.RecordingState
-import com.tumorrecorder.app.ui.components.StatusBadge
-import com.tumorrecorder.app.ui.components.UrgencyBadge
 import com.tumorrecorder.app.ui.theme.MedicalTeal
 import com.tumorrecorder.app.ui.theme.MedicalTealLight
 import com.tumorrecorder.app.ui.theme.SuccessGreen
@@ -121,21 +122,23 @@ fun HomeScreen(
     onOpenFullScreenIntentSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit,
+    onOpenConsultationRecords: () -> Unit,
     onOpenRecord: (Long) -> Unit,
     onOpenPrompts: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
-    val records by viewModel.records.collectAsStateWithLifecycle()
+    val callLogs by viewModel.filteredCallLogs.collectAsStateWithLifecycle()
+    val callLogFilter by viewModel.callLogFilter.collectAsStateWithLifecycle()
+    val hasCallLogPermission by viewModel.hasCallLogPermission.collectAsStateWithLifecycle()
+    val consultationRecordCount by viewModel.consultationRecordCount.collectAsStateWithLifecycle()
+    val pendingAnalysisCount by viewModel.pendingAnalysisCount.collectAsStateWithLifecycle()
     val recordingState by viewModel.recordingState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val dialNumber by viewModel.dialNumber.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val pendingConfirmRecord by viewModel.pendingConfirmRecord.collectAsStateWithLifecycle()
     val promptTemplates by viewModel.promptTemplates.collectAsStateWithLifecycle()
-
-    var manualAnalyzeRecordId by remember { mutableStateOf<Long?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -218,7 +221,7 @@ fun HomeScreen(
                 item(key = "permission_banner") {
                     SetupWarningCard(
                         title = "尚未授予通話與錄音權限",
-                        message = "請授予麥克風、撥號、電話狀態、通話紀錄與通知權限，以便直接透過本 App 收發電話與錄音。",
+                        message = "請授予麥克風、撥號、電話狀態、通話紀錄與通知權限，以便直接透過本 App 收發電話、顯示通話紀錄與錄音。",
                         actionLabel = "立即授權",
                         onAction = onRequestPermissions
                     )
@@ -247,6 +250,14 @@ fun HomeScreen(
                         onAction = onOpenSettings
                     )
                 }
+            }
+
+            item(key = "consultation_records_entry") {
+                ConsultationRecordsEntryCard(
+                    totalCount = consultationRecordCount,
+                    pendingCount = pendingAnalysisCount,
+                    onClick = onOpenConsultationRecords
+                )
             }
 
             item(key = "recording_control") {
@@ -291,46 +302,68 @@ fun HomeScreen(
                 )
             }
 
-            item(key = "search_bar") {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = viewModel::onSearchQueryChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("搜尋病人姓名、病歷號／身分證、個管師或內容...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
-                                Icon(Icons.Default.Close, contentDescription = "清除")
-                            }
+            item(key = "call_log_header") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = null,
+                                tint = MedicalTeal,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "最近通話紀錄（撥號／來電）",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
                         }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp)
-                )
-            }
+                        IconButton(
+                            onClick = { viewModel.refreshCallLog() },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "重新整理通話紀錄",
+                                tint = MedicalTeal,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
 
-            item(key = "list_header") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "通話諮詢紀錄 (${records.size})",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        text = if (settings.autoAnalyzeAfterCall) "掛斷自動分析" else "掛斷先詢問分析",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MedicalTeal
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CallLogFilter.entries.forEach { filter ->
+                            FilterChip(
+                                selected = callLogFilter == filter,
+                                onClick = { viewModel.onCallLogFilterChanged(filter) },
+                                label = { Text(filter.label) }
+                            )
+                        }
+                    }
                 }
             }
 
-            if (records.isEmpty()) {
-                item(key = "empty_state") {
+            if (!hasCallLogPermission) {
+                item(key = "call_log_perm_card") {
+                    SetupWarningCard(
+                        title = "需要「通話紀錄」讀取權限",
+                        message = "授權後即可在首頁直接檢視最近的來電、撥出與未接紀錄，並一鍵選擇錄音回撥或一般回撥。",
+                        actionLabel = "授權讀取通話紀錄",
+                        onAction = onRequestPermissions
+                    )
+                }
+            } else if (callLogs.isEmpty()) {
+                item(key = "call_log_empty") {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -339,22 +372,22 @@ fun HomeScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(28.dp),
+                                .padding(24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Mic,
+                                imageVector = Icons.Default.Call,
                                 contentDescription = null,
-                                tint = MedicalTeal.copy(alpha = 0.6f),
-                                modifier = Modifier.size(40.dp)
+                                tint = MedicalTeal.copy(alpha = 0.55f),
+                                modifier = Modifier.size(36.dp)
                             )
                             Text(
-                                text = "尚無通話錄音紀錄",
-                                style = MaterialTheme.typography.titleMedium
+                                text = "目前沒有${if (callLogFilter == CallLogFilter.ALL) "" else callLogFilter.label}通話紀錄",
+                                style = MaterialTheme.typography.titleSmall
                             )
                             Text(
-                                text = "透過本 App 接聽或撥出錄音通話，結束後會先詢問您要使用哪組 Prompt 進行 AI 摘要與寄信。",
+                                text = "有來電或撥出電話後會自動顯示於此清單，點擊可直接回撥。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -362,11 +395,28 @@ fun HomeScreen(
                     }
                 }
             } else {
-                items(records, key = { it.id }) { record ->
-                    CallRecordItemCard(
-                        record = record,
-                        onClick = { onOpenRecord(record.id) },
-                        onAnalyzeOrRetry = { manualAnalyzeRecordId = record.id }
+                items(callLogs, key = { it.id }) { entry ->
+                    DeviceCallLogRow(
+                        entry = entry,
+                        onFillNumber = {
+                            if (entry.number.isNotBlank()) {
+                                viewModel.onDialNumberChanged(entry.number)
+                            }
+                        },
+                        onCallWithRecord = {
+                            if (entry.number.isNotBlank()) {
+                                viewModel.onDialNumberChanged(entry.number)
+                                CallManager.prepareAppOutgoingCall(recordThisCall = true)
+                                placePhoneCall(context, entry.number)
+                            }
+                        },
+                        onCallWithoutRecord = {
+                            if (entry.number.isNotBlank()) {
+                                viewModel.onDialNumberChanged(entry.number)
+                                CallManager.prepareAppOutgoingCall(recordThisCall = false)
+                                placePhoneCall(context, entry.number)
+                            }
+                        }
                     )
                 }
             }
@@ -450,48 +500,196 @@ fun HomeScreen(
             }
         )
     }
+}
 
-    // Prompt picker dialog when tapping "開始分析" / "重試" on an existing list record
-    val targetManualId = manualAnalyzeRecordId
-    if (targetManualId != null) {
-        var selectedPromptId by remember(targetManualId, promptTemplates) {
-            mutableStateOf(
-                (promptTemplates.firstOrNull { it.isDefault } ?: promptTemplates.firstOrNull())?.id
+@Composable
+private fun ConsultationRecordsEntryCard(
+    totalCount: Int,
+    pendingCount: Int,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MedicalTealLight.copy(alpha = 0.65f)),
+        border = BorderStroke(1.dp, MedicalTeal.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(MedicalTeal),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FolderShared,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "通話諮詢紀錄與搜尋",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MedicalTeal
+                )
+                val subtitle = buildString {
+                    append("共 $totalCount 筆錄音摘要紀錄")
+                    if (pendingCount > 0) {
+                        append(" ・ $pendingCount 筆待分析")
+                    }
+                }
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF115E59)
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "進入通話諮詢紀錄",
+                tint = MedicalTeal,
+                modifier = Modifier.size(26.dp)
             )
         }
-        AlertDialog(
-            onDismissRequest = { manualAnalyzeRecordId = null },
-            title = { Text("選擇要使用的分析 Prompt") },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    com.tumorrecorder.app.ui.components.PromptTemplatePickerList(
-                        templates = promptTemplates,
-                        selectedTemplateId = selectedPromptId,
-                        onSelect = { selectedPromptId = it }
+    }
+}
+
+@Composable
+private fun DeviceCallLogRow(
+    entry: DeviceCallLogEntry,
+    onFillNumber: () -> Unit,
+    onCallWithRecord: () -> Unit,
+    onCallWithoutRecord: () -> Unit
+) {
+    val directionIcon = when {
+        entry.isMissedOrRejected -> Icons.AutoMirrored.Filled.CallMissed
+        entry.type == CallLog.Calls.OUTGOING_TYPE -> Icons.AutoMirrored.Filled.CallMade
+        else -> Icons.AutoMirrored.Filled.CallReceived
+    }
+    val directionTint = when {
+        entry.isMissedOrRejected -> UrgentRed
+        entry.type == CallLog.Calls.OUTGOING_TYPE -> SuccessGreen
+        else -> MedicalTeal
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onFillNumber),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(directionTint.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = directionIcon,
+                    contentDescription = entry.typeLabel,
+                    tint = directionTint,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = entry.displayTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (entry.isMissedOrRejected) UrgentRed else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (entry.hasCachedName && entry.number.isNotBlank()) {
+                    Text(
+                        text = entry.number,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.analyzeWithPrompt(targetManualId, selectedPromptId ?: -1L)
-                        manualAnalyzeRecordId = null
-                    }
-                ) {
-                    Text("開始 AI 分析")
+                val durationPart = if (entry.durationSeconds > 0L) {
+                    " ・ ${EmailFormatter.formatDuration(entry.durationSeconds)}"
+                } else {
+                    ""
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { manualAnalyzeRecordId = null }) {
-                    Text("取消")
+                Text(
+                    text = "${entry.typeLabel} ・ ${EmailFormatter.formatShortTimestamp(entry.dateMillis)}$durationPart",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (entry.number.isNotBlank()) {
+                FilledTonalIconButton(
+                    onClick = onCallWithRecord,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = SuccessGreen,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = "錄音回撥",
+                            modifier = Modifier.size(19.dp)
+                        )
+                        Icon(
+                            imageVector = Icons.Default.FiberManualRecord,
+                            contentDescription = null,
+                            tint = Color(0xFFFCA5A5),
+                            modifier = Modifier
+                                .size(8.dp)
+                                .align(Alignment.TopEnd)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onCallWithoutRecord,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Call,
+                        contentDescription = "一般回撥（不錄音）",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
+                    )
                 }
             }
-        )
+        }
     }
 }
 
@@ -751,7 +949,7 @@ private fun RecordingControlCard(
                     value = dialNumber,
                     onValueChange = onDialNumberChange,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("輸入電話號碼...") },
+                    placeholder = { Text("輸入電話號碼或點下方紀錄填入...") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     trailingIcon = {
@@ -874,173 +1072,6 @@ private fun InAppDialpad(onDigit: (String) -> Unit) {
                                 color = Color(0xFF0F172A)
                             )
                         }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CallRecordItemCard(
-    record: CallRecordEntity,
-    onClick: () -> Unit,
-    onAnalyzeOrRetry: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(
-            width = if (record.urgencyLevel == "緊急") 1.5.dp else 1.dp,
-            color = if (record.urgencyLevel == "緊急") UrgentRed.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = null,
-                        tint = MedicalTeal,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = record.patientName.ifBlank {
-                            record.phoneNumber.ifBlank { "${record.callDirection.label}紀錄" }
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (record.urgencyLevel.isNotBlank() && record.summary.isNotBlank()) {
-                        UrgencyBadge(record.urgencyLevel)
-                    }
-                }
-                StatusBadge(record.processingStatus)
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (record.patientIdentifier.isNotBlank()) {
-                    Text(
-                        text = "病歷／證號：${record.patientIdentifier}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                if (record.caseManagerName.isNotBlank()) {
-                    Text(
-                        text = "個管師：${record.caseManagerName}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MedicalTeal
-                    )
-                }
-            }
-
-            if (record.summary.isNotBlank()) {
-                Text(
-                    text = record.summary,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
-            } else if (!record.errorMessage.isNullOrBlank()) {
-                Text(
-                    text = record.errorMessage,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = UrgentRed,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val supplementTag = if (record.hasSupplementAudio) {
-                    " ・ 含口述補充(${EmailFormatter.formatDuration(record.supplementDurationSeconds)})"
-                } else {
-                    ""
-                }
-                Text(
-                    text = "${EmailFormatter.formatShortTimestamp(record.startedAtMillis)} ・ ${record.callDirection.label} ・ ${EmailFormatter.formatDuration(record.durationSeconds)}$supplementTag",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (record.emailSent) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "已寄信",
-                            tint = SuccessGreen,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "已寄信",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = SuccessGreen
-                        )
-                    } else if (record.processingStatus == ProcessingStatus.PENDING) {
-                        Button(
-                            onClick = onAnalyzeOrRetry,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("開始分析", style = MaterialTheme.typography.labelMedium)
-                        }
-                    } else if (record.processingStatus == ProcessingStatus.FAILED) {
-                        FilledTonalButton(
-                            onClick = onAnalyzeOrRetry,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("重試", style = MaterialTheme.typography.labelMedium)
-                        }
-                    } else if (record.processingStatus == ProcessingStatus.COMPLETED_NO_EMAIL) {
-                        Icon(
-                            imageVector = Icons.Default.Email,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = "未寄信",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 }
             }

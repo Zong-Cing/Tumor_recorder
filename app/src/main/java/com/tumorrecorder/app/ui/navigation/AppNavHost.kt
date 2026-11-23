@@ -36,6 +36,7 @@ fun AppNavHost(
     onConsumeInitialRecordId: () -> Unit,
     initialDialNumber: String?,
     onConsumeInitialDialNumber: () -> Unit,
+    callLogRefreshTick: Int,
     hasRequiredPermissions: Boolean,
     isAccessibilityEnabled: Boolean,
     isDefaultDialer: Boolean,
@@ -44,7 +45,8 @@ fun AppNavHost(
     onRequestDefaultDialer: () -> Unit,
     onOpenFullScreenIntentSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
-    onOpenAppDetailsSettings: () -> Unit
+    onOpenAppDetailsSettings: () -> Unit,
+    onOpenConsultationRecords: () -> Unit
 ) {
     val navController = rememberNavController()
     val settings by container.settingsRepository.settings.collectAsStateWithLifecycle()
@@ -70,6 +72,9 @@ fun AppNavHost(
                     onConsumeInitialDialNumber()
                 }
             }
+            LaunchedEffect(callLogRefreshTick) {
+                vm.refreshCallLog()
+            }
             HomeScreen(
                 viewModel = vm,
                 hasRequiredPermissions = hasRequiredPermissions,
@@ -81,6 +86,7 @@ fun AppNavHost(
                 onOpenFullScreenIntentSettings = onOpenFullScreenIntentSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onOpenAppDetailsSettings = onOpenAppDetailsSettings,
+                onOpenConsultationRecords = onOpenConsultationRecords,
                 onOpenRecord = { id -> navController.navigate(Routes.detail(id)) },
                 onOpenPrompts = { navController.navigate(Routes.PROMPTS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) }

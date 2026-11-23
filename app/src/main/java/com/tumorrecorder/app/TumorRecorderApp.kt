@@ -93,6 +93,8 @@ class TumorRecorderApp : Application() {
 class AppContainer(application: Application) {
     val database: AppDatabase = AppDatabase.getInstance(application)
     val settingsRepository: SettingsRepository = SettingsRepository(application)
+    val deviceCallLogRepository: com.tumorrecorder.app.data.local.DeviceCallLogRepository =
+        com.tumorrecorder.app.data.local.DeviceCallLogRepository(application)
     val geminiService: GeminiService = GeminiService()
     val emailService: EmailService = EmailService()
     val promptTemplateRepository: com.tumorrecorder.app.data.repository.PromptTemplateRepository =

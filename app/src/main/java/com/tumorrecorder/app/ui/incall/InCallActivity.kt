@@ -3,6 +3,7 @@ package com.tumorrecorder.app.ui.incall
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.telecom.Call
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -86,9 +87,15 @@ import kotlinx.coroutines.launch
 
 class InCallActivity : ComponentActivity() {
 
+    private var proximityWakeLock: PowerManager.WakeLock? = null
+    private var lastDesiredProximity: Boolean = false
+    private var isResumedState: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableShowWhenLocked()
+        initProximityWakeLock()
+        handleCallActionIntent(intent)
 
         val container = (application as TumorRecorderApp).container
 
@@ -96,22 +103,37 @@ class InCallActivity : ComponentActivity() {
             TumorRecorderTheme {
                 val callState by CallManager.callState.collectAsStateWithLifecycle()
                 val recordingState by CallRecordingService.recordingState.collectAsStateWithLifecycle()
+                val isFinalizingRecording by CallRecordingService.isFinalizingRecording.collectAsStateWithLifecycle()
                 val pendingConfirmId by CallRecordingService.pendingConfirmRecordId.collectAsStateWithLifecycle()
                 val scope = rememberCoroutineScope()
 
+                val shouldUseProximity = callState != null &&
+                    !callState!!.isSpeakerOn &&
+                    callState!!.state in setOf(
+                        Call.STATE_DIALING,
+                        Call.STATE_CONNECTING,
+                        Call.STATE_ACTIVE,
+                        Call.STATE_HOLDING
+                    )
+                LaunchedEffect(shouldUseProximity) {
+                    lastDesiredProximity = shouldUseProximity
+                    updateProximityWakeLock(shouldUseProximity && isResumedState)
+                }
+
                 var hadRecordingInThisSession by remember { mutableStateOf(false) }
-                if (recordingState.isRecording) {
+                if (recordingState.isRecording || isFinalizingRecording || callState?.shouldRecordThisCall == true) {
                     hadRecordingInThisSession = true
                 }
 
                 // Auto-close when call ends and there's no pending analysis confirmation to ask
-                LaunchedEffect(callState, pendingConfirmId, hadRecordingInThisSession) {
+                LaunchedEffect(callState, pendingConfirmId, hadRecordingInThisSession, isFinalizingRecording) {
                     val callEnded = callState == null || callState?.state == Call.STATE_DISCONNECTED
-                    if (callEnded && pendingConfirmId == null) {
+                    if (callEnded && pendingConfirmId == null && !isFinalizingRecording) {
                         // Give finishRecording() a short window to flush MediaRecorder and emit pendingConfirmId
-                        delay(if (hadRecordingInThisSession) 1500L else 400L)
+                        delay(if (hadRecordingInThisSession) 2500L else 500L)
                         if (!isFinishing &&
                             CallManager.callState.value == null &&
+                            !CallRecordingService.isFinalizingRecording.value &&
                             CallRecordingService.pendingConfirmRecordId.value == null
                         ) {
                             finish()
@@ -159,10 +181,85 @@ class InCallActivity : ComponentActivity() {
                                 .background(Color(0xFF0F172A)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("正在結束通話...", color = Color.White)
+                            Text(
+                                text = if (isFinalizingRecording || hadRecordingInThisSession) {
+                                    "正在儲存錄音..."
+                                } else {
+                                    "正在結束通話..."
+                                },
+                                color = Color.White
+                            )
                         }
                     }
                 }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isResumedState = true
+        updateProximityWakeLock(lastDesiredProximity)
+    }
+
+    override fun onPause() {
+        isResumedState = false
+        updateProximityWakeLock(false, waitForNoProximity = false)
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        updateProximityWakeLock(false, waitForNoProximity = false)
+        proximityWakeLock = null
+        super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleCallActionIntent(intent)
+    }
+
+    private fun initProximityWakeLock() {
+        val pm = getSystemService(PowerManager::class.java) ?: return
+        if (pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+            proximityWakeLock = pm.newWakeLock(
+                PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                "TumorRecorder:InCallProximity"
+            ).apply {
+                setReferenceCounted(false)
+            }
+        }
+    }
+
+    private fun updateProximityWakeLock(enable: Boolean, waitForNoProximity: Boolean = true) {
+        val wl = proximityWakeLock ?: return
+        runCatching {
+            if (enable) {
+                if (!wl.isHeld) {
+                    wl.acquire(4 * 60 * 60 * 1000L) // safety timeout 4h
+                }
+            } else {
+                if (wl.isHeld) {
+                    if (waitForNoProximity) {
+                        wl.release(PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY)
+                    } else {
+                        wl.release()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleCallActionIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_ANSWER_RECORD -> {
+                intent.action = null
+                CallManager.answer(recordThisCall = true)
+            }
+            ACTION_ANSWER_PRIVATE -> {
+                intent.action = null
+                CallManager.answer(recordThisCall = false)
             }
         }
     }
@@ -191,6 +288,11 @@ class InCallActivity : ComponentActivity() {
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
         }
+    }
+
+    companion object {
+        const val ACTION_ANSWER_RECORD = "com.tumorrecorder.app.action.UI_ANSWER_RECORD"
+        const val ACTION_ANSWER_PRIVATE = "com.tumorrecorder.app.action.UI_ANSWER_PRIVATE"
     }
 }
 

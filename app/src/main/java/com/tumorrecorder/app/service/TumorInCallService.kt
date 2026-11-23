@@ -108,13 +108,13 @@ class TumorInCallService : InCallService() {
         if (!canNotify) return
 
         val fullScreenPending = buildInCallPendingIntent(REQ_FULL_SCREEN)
-        val answerRecordPending = buildActionPendingIntent(
-            action = IncomingCallActionReceiver.ACTION_ANSWER_RECORD,
-            requestCode = REQ_ANSWER_RECORD
+        val answerRecordPending = buildInCallPendingIntent(
+            requestCode = REQ_ANSWER_RECORD,
+            action = InCallActivity.ACTION_ANSWER_RECORD
         )
-        val answerPrivatePending = buildActionPendingIntent(
-            action = IncomingCallActionReceiver.ACTION_ANSWER_PRIVATE,
-            requestCode = REQ_ANSWER_PRIVATE
+        val answerPrivatePending = buildInCallPendingIntent(
+            requestCode = REQ_ANSWER_PRIVATE,
+            action = InCallActivity.ACTION_ANSWER_PRIVATE
         )
         val declinePending = buildActionPendingIntent(
             action = IncomingCallActionReceiver.ACTION_DECLINE,
@@ -126,32 +126,56 @@ class TumorInCallService : InCallService() {
             .setImportant(true)
             .build()
 
-        val notification = NotificationCompat.Builder(this, TumorRecorderApp.CHANNEL_INCOMING_CALL)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("腫瘤個管來電：$number")
-            .setContentText("點擊「接聽」自動錄音，或點通知選擇私人不錄音")
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .setStyle(
-                NotificationCompat.CallStyle.forIncomingCall(
-                    caller,
-                    declinePending,
-                    answerRecordPending
+        val callStyleNotification = runCatching {
+            NotificationCompat.Builder(this, TumorRecorderApp.CHANNEL_INCOMING_CALL)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("腫瘤個管來電：$number")
+                .setContentText("點擊「接聽」自動錄音，或點通知選擇私人不錄音")
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setStyle(
+                    NotificationCompat.CallStyle.forIncomingCall(
+                        caller,
+                        declinePending,
+                        answerRecordPending
+                    )
                 )
-            )
-            .addAction(
-                0,
-                "私人接聽(不錄音)",
-                answerPrivatePending
-            )
-            .setFullScreenIntent(fullScreenPending, true)
-            .setContentIntent(fullScreenPending)
-            .build()
+                .addAction(0, "私人接聽(不錄音)", answerPrivatePending)
+                .setFullScreenIntent(fullScreenPending, true)
+                .setContentIntent(fullScreenPending)
+                .build()
+        }.getOrNull()
 
-        nm.notify(NOTIFICATION_ID_INCOMING, notification)
+        val posted = callStyleNotification != null && runCatching {
+            nm.notify(NOTIFICATION_ID_INCOMING, callStyleNotification)
+            true
+        }.getOrElse { e ->
+            Log.w(TAG, "CallStyle incoming notification failed; falling back to standard notification", e)
+            false
+        }
+
+        if (!posted) {
+            val fallback = NotificationCompat.Builder(this, TumorRecorderApp.CHANNEL_INCOMING_CALL)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("腫瘤個管來電：$number")
+                .setContentText("點擊接聽並錄音、私人接聽或拒接")
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .addAction(0, "接聽並錄音", answerRecordPending)
+                .addAction(0, "私人接聽", answerPrivatePending)
+                .addAction(0, "拒接", declinePending)
+                .setFullScreenIntent(fullScreenPending, true)
+                .setContentIntent(fullScreenPending)
+                .build()
+            runCatching { nm.notify(NOTIFICATION_ID_INCOMING, fallback) }
+                .onFailure { e -> Log.e(TAG, "Fallback incoming notification failed", e) }
+        }
     }
 
     private fun showOngoingCallNotification(number: String) {
@@ -168,31 +192,30 @@ class TumorInCallService : InCallService() {
             requestCode = REQ_HANGUP
         )
 
-        val caller = Person.Builder()
-            .setName(number.ifBlank { "通話中" })
-            .setImportant(true)
-            .build()
-
+        // IMPORTANT: Do NOT use NotificationCompat.CallStyle.forOngoingCall via nm.notify() here.
+        // On Android 14/15/16 (targetSdk 34+), CallStyle without startForeground() or fullScreenIntent
+        // throws IllegalArgumentException and aborts the call state callback before recording starts.
         val notification = NotificationCompat.Builder(this, TumorRecorderApp.CHANNEL_ONGOING_CALL)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("通話中：${number.ifBlank { "進行中" }}")
+            .setContentText("點擊返回腫瘤個管通話畫面")
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
             .setSilent(true)
             .setUsesChronometer(true)
-            .setStyle(
-                NotificationCompat.CallStyle.forOngoingCall(
-                    caller,
-                    hangupPending
-                )
-            )
+            .addAction(0, "掛斷", hangupPending)
             .setContentIntent(contentPending)
             .build()
 
-        nm.notify(NOTIFICATION_ID_ONGOING, notification)
+        runCatching { nm.notify(NOTIFICATION_ID_ONGOING, notification) }
+            .onFailure { e -> Log.w(TAG, "Failed to post ongoing call notification", e) }
     }
 
-    private fun buildInCallPendingIntent(requestCode: Int): PendingIntent {
+    private fun buildInCallPendingIntent(requestCode: Int, action: String? = null): PendingIntent {
         val intent = Intent(this, InCallActivity::class.java).apply {
+            if (!action.isNullOrBlank()) {
+                this.action = action
+            }
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         return PendingIntent.getActivity(

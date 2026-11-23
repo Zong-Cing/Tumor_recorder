@@ -115,8 +115,9 @@ object CallManager {
         Log.i(TAG, "onCallAdded: number=$number initialState=$initialState isIncoming=$isIncoming")
 
         val shouldRecord = if (isIncoming) {
-            // Wait for user to tap "接聽並錄音" vs "僅接聽（不錄音）"
-            false
+            // Default to true so answering via heads-up banner, Bluetooth, or headset records automatically;
+            // tapping "僅接聽（不錄音）" or "私人接聽(不錄音)" explicitly sets this to false.
+            true
         } else {
             val age = System.currentTimeMillis() - pendingOutgoingSetAtMillis
             val explicit = if (age in 0..PENDING_OUTGOING_TTL_MS) pendingOutgoingRecordFlag else null
@@ -163,8 +164,16 @@ object CallManager {
     fun answer(recordThisCall: Boolean) {
         val call = activeCall ?: return
         val current = _callState.value ?: return
+        Log.i(TAG, "answer: recordThisCall=$recordThisCall currentState=${getCallStateCompat(call)}")
         _callState.value = current.copy(shouldRecordThisCall = recordThisCall)
-        call.answer(VideoProfile.STATE_AUDIO_ONLY)
+        if (getCallStateCompat(call) == Call.STATE_ACTIVE) {
+            val service = inCallService
+            if (recordThisCall && service != null) {
+                startRecordingIfNeeded(service, current.phoneNumber, current.isIncoming)
+            }
+        } else {
+            call.answer(VideoProfile.STATE_AUDIO_ONLY)
+        }
     }
 
     fun reject() {
@@ -252,17 +261,33 @@ object CallManager {
 
     private fun startRecordingIfNeeded(context: Context, number: String, isIncoming: Boolean) {
         if (CallRecordingService.recordingState.value.isRecording) return
-        val launchContext = CallRecorderAccessibilityService.instance ?: context
+        val a11yContext = CallRecorderAccessibilityService.instance
+        val launchContext = a11yContext ?: context
         val direction = if (isIncoming) CallDirection.INCOMING else CallDirection.OUTGOING
-        runCatching {
+        Log.i(TAG, "startRecordingIfNeeded: number=$number direction=${direction.name} usingA11y=${a11yContext != null}")
+        val started = runCatching {
             CallRecordingService.startRecording(
                 context = launchContext,
                 phoneNumber = number,
                 direction = direction,
                 fromPhoneCall = true
             )
-        }.onFailure { e ->
-            Log.e(TAG, "Failed to start CallRecordingService from CallManager", e)
+            true
+        }.getOrElse { e ->
+            Log.e(TAG, "Failed to start CallRecordingService via launchContext", e)
+            false
+        }
+        if (!started && launchContext !== context) {
+            runCatching {
+                CallRecordingService.startRecording(
+                    context = context,
+                    phoneNumber = number,
+                    direction = direction,
+                    fromPhoneCall = true
+                )
+            }.onFailure { e2 ->
+                Log.e(TAG, "Fallback startRecording via InCallService context also failed", e2)
+            }
         }
     }
 
@@ -283,21 +308,21 @@ object CallManager {
             )
 
             val service = inCallService as? TumorInCallService
-            Log.i(TAG, "onStateChanged: number=$number state=$state isIncoming=${current.isIncoming}")
+            Log.i(TAG, "onStateChanged: number=$number state=$state isIncoming=${current.isIncoming} shouldRecord=${current.shouldRecordThisCall}")
             when (state) {
                 Call.STATE_RINGING -> {
-                    service?.onCallRinging(number.ifBlank { "未知來電" })
+                    runCatching { service?.onCallRinging(number.ifBlank { "未知來電" }) }
                 }
 
                 Call.STATE_ACTIVE -> {
-                    service?.onCallActive(number.ifBlank { "通話中" })
+                    runCatching { service?.onCallActive(number.ifBlank { "通話中" }) }
                     if (current.shouldRecordThisCall && inCallService != null) {
                         startRecordingIfNeeded(inCallService!!, number, current.isIncoming)
                     }
                 }
 
                 Call.STATE_DISCONNECTED -> {
-                    service?.cancelCallNotifications()
+                    runCatching { service?.cancelCallNotifications() }
                     if (inCallService != null && CallRecordingService.recordingState.value.isRecording) {
                         CallRecordingService.stopRecording(inCallService!!)
                     }

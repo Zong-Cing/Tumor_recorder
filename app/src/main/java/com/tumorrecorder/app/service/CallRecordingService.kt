@@ -129,27 +129,66 @@ class CallRecordingService : Service() {
         val file = File(recordingsDir, "call_${startedAtMillis}.m4a")
         outputFile = file
 
-        startForegroundSafely(buildRecordingNotification(0L, false))
+        if (!startForegroundSafely(buildRecordingNotification(0L, false))) {
+            outputFile = null
+            val msg = "受 Android 背景錄音限制無法啟動錄音服務，請先點開來電畫面或確認無障礙服務已開啟。"
+            _recordingState.value = RecordingState(isRecording = false, errorMessage = msg)
+            showRecordingErrorNotification(msg)
+            stopSelfSafely()
+            return
+        }
 
         if (fromPhoneCall && settings.autoEnableSpeakerOnCall) {
             setSpeakerphone(true)
         }
 
-        val usedSource = startMediaRecorder(
+        var usedSource = startMediaRecorder(
             file = file,
             preferredSource = settings.audioSource,
             fromPhoneCall = fromPhoneCall
         )
-        if (usedSource == null) {
+        if (usedSource != null) {
+            onRecorderStarted(app, file, phoneNumber, direction, usedSource)
+        } else if (fromPhoneCall) {
+            // Right after answering an incoming call, Samsung/Android Telecom may still be
+            // releasing the ringtone audio stream for ~300-400ms. Retry once cleanly.
+            Log.w(TAG, "First MediaRecorder start failed on phone call; retrying in 450ms...")
+            isActivelyRecording = true
+            serviceScope.launch {
+                delay(450L)
+                if (!isActivelyRecording || outputFile != file) return@launch
+                val retried = startMediaRecorder(
+                    file = file,
+                    preferredSource = settings.audioSource,
+                    fromPhoneCall = true
+                )
+                if (retried != null) {
+                    onRecorderStarted(app, file, phoneNumber, direction, retried)
+                } else {
+                    isActivelyRecording = false
+                    outputFile = null
+                    val msg = "無法啟動通話錄音，請確認已開啟「無障礙錄音服務」與麥克風權限。"
+                    _recordingState.value = RecordingState(isRecording = false, errorMessage = msg)
+                    showRecordingErrorNotification(msg)
+                    stopSelfSafely()
+                }
+            }
+        } else {
             outputFile = null
-            _recordingState.value = RecordingState(
-                isRecording = false,
-                errorMessage = "無法啟動通話錄音，請確認已開啟「無障礙錄音服務」與麥克風權限。"
-            )
+            val msg = "無法啟動錄音，請確認麥克風權限是否已授予。"
+            _recordingState.value = RecordingState(isRecording = false, errorMessage = msg)
+            showRecordingErrorNotification(msg)
             stopSelfSafely()
-            return
         }
+    }
 
+    private fun onRecorderStarted(
+        app: TumorRecorderApp,
+        file: File,
+        phoneNumber: String,
+        direction: CallDirection,
+        usedSource: RecordingAudioSource
+    ) {
         isActivelyRecording = true
         val a11yTag = if (CallRecorderAccessibilityService.isServiceEnabled(this)) "無障礙已啟用" else "無障礙未啟用"
         activeAudioSourceLabel = "${usedSource.name} ($a11yTag)"
@@ -289,50 +328,68 @@ class CallRecordingService : Service() {
         val settings = app.container.settingsRepository.currentSettings()
         val (quickPatient, quickId, quickCm) = CallManager.snapshotQuickNotes()
 
+        _isFinalizingRecording.value = true
         serviceScope.launch(Dispatchers.IO) {
-            runCatching { pendingInsertJob?.join() }
-            val recordId = initialRecordId ?: activeRecordId
+            try {
+                runCatching { pendingInsertJob?.join() }
+                val recordId = initialRecordId ?: activeRecordId
 
-            var stopSucceeded = false
-            var failureReason: String? = null
-            if (activeMediaRecorder != null) {
-                stopSucceeded = runCatching {
-                    activeMediaRecorder.stop()
-                    true
-                }.getOrElse { e ->
-                    failureReason = e.message ?: e::class.java.simpleName
-                    Log.w(TAG, "MediaRecorder stop error", e)
-                    false
+                var stopSucceeded = false
+                var failureReason: String? = null
+                if (activeMediaRecorder != null) {
+                    stopSucceeded = runCatching {
+                        activeMediaRecorder.stop()
+                        true
+                    }.getOrElse { e ->
+                        failureReason = e.message ?: e::class.java.simpleName
+                        Log.w(TAG, "MediaRecorder stop error", e)
+                        false
+                    }
+                    runCatching { activeMediaRecorder.reset() }
+                    runCatching { activeMediaRecorder.release() }
                 }
-                runCatching { activeMediaRecorder.reset() }
-                runCatching { activeMediaRecorder.release() }
-            }
 
-            val repo = app.container.callRecordRepository
-            val fileBytes = if (file != null && file.exists()) file.length() else 0L
-            Log.i(
-                TAG,
-                "finishRecording: stopSucceeded=$stopSucceeded recordId=$recordId bytes=$fileBytes elapsed=${elapsed}s reason=$failureReason"
-            )
+                val repo = app.container.callRecordRepository
+                val fileBytes = if (file != null && file.exists()) file.length() else 0L
+                Log.i(
+                    TAG,
+                    "finishRecording: stopSucceeded=$stopSucceeded recordId=$recordId bytes=$fileBytes elapsed=${elapsed}s reason=$failureReason"
+                )
 
-            if (stopSucceeded && file != null && file.exists() && fileBytes > 1024L) {
-                val finalId = if (recordId != null) {
-                    val existing = repo.getRecord(recordId)
-                    if (existing != null) {
-                        repo.updateRecord(
-                            existing.copy(
-                                phoneNumber = existing.phoneNumber.ifBlank { phoneNumber },
-                                durationSeconds = elapsed,
-                                audioFilePath = file.absolutePath,
-                                audioMimeType = "audio/mp4",
-                                patientName = existing.patientName.ifBlank { quickPatient },
-                                patientIdentifier = existing.patientIdentifier.ifBlank { quickId },
-                                caseManagerName = existing.caseManagerName.ifBlank { quickCm },
-                                status = ProcessingStatus.PENDING.name,
-                                errorMessage = null
+                if (stopSucceeded && file != null && file.exists() && fileBytes > 1024L) {
+                    val finalId = if (recordId != null) {
+                        val existing = repo.getRecord(recordId)
+                        if (existing != null) {
+                            repo.updateRecord(
+                                existing.copy(
+                                    phoneNumber = existing.phoneNumber.ifBlank { phoneNumber },
+                                    durationSeconds = elapsed,
+                                    audioFilePath = file.absolutePath,
+                                    audioMimeType = "audio/mp4",
+                                    patientName = existing.patientName.ifBlank { quickPatient },
+                                    patientIdentifier = existing.patientIdentifier.ifBlank { quickId },
+                                    caseManagerName = existing.caseManagerName.ifBlank { quickCm },
+                                    status = ProcessingStatus.PENDING.name,
+                                    errorMessage = null
+                                )
                             )
-                        )
-                        recordId
+                            recordId
+                        } else {
+                            repo.insertRecord(
+                                CallRecordEntity(
+                                    phoneNumber = phoneNumber,
+                                    direction = direction.name,
+                                    startedAtMillis = startMillis,
+                                    durationSeconds = elapsed,
+                                    audioFilePath = file.absolutePath,
+                                    audioMimeType = "audio/mp4",
+                                    patientName = quickPatient,
+                                    patientIdentifier = quickId,
+                                    caseManagerName = quickCm,
+                                    status = ProcessingStatus.PENDING.name
+                                )
+                            )
+                        }
                     } else {
                         repo.insertRecord(
                             CallRecordEntity(
@@ -349,42 +406,29 @@ class CallRecordingService : Service() {
                             )
                         )
                     }
-                } else {
-                    repo.insertRecord(
-                        CallRecordEntity(
-                            phoneNumber = phoneNumber,
-                            direction = direction.name,
-                            startedAtMillis = startMillis,
-                            durationSeconds = elapsed,
-                            audioFilePath = file.absolutePath,
-                            audioMimeType = "audio/mp4",
-                            patientName = quickPatient,
-                            patientIdentifier = quickId,
-                            caseManagerName = quickCm,
-                            status = ProcessingStatus.PENDING.name
-                        )
-                    )
-                }
 
-                Log.i(TAG, "Saved call record id=$finalId bytes=$fileBytes autoAnalyze=${settings.autoAnalyzeAfterCall}")
+                    Log.i(TAG, "Saved call record id=$finalId bytes=$fileBytes autoAnalyze=${settings.autoAnalyzeAfterCall}")
 
-                if (settings.autoAnalyzeAfterCall) {
-                    repo.enqueueProcessing(finalId)
+                    if (settings.autoAnalyzeAfterCall) {
+                        repo.enqueueProcessing(finalId)
+                    } else {
+                        _pendingConfirmRecordId.value = finalId
+                        showPostCallConfirmNotification(finalId, phoneNumber, elapsed)
+                    }
                 } else {
-                    _pendingConfirmRecordId.value = finalId
-                    showPostCallConfirmNotification(finalId, phoneNumber, elapsed)
+                    if (recordId != null) {
+                        repo.getRecord(recordId)?.let { repo.deleteRecord(it) }
+                    }
+                    file?.let { runCatching { it.delete() } }
+                    val msg = "錄音存檔未完成（長度 ${elapsed}s / ${fileBytes} bytes${if (!failureReason.isNullOrBlank()) "：$failureReason" else ""}）"
+                    Log.w(TAG, msg)
+                    _recordingState.value = RecordingState(isRecording = false, errorMessage = msg)
+                    showRecordingErrorNotification(msg)
                 }
-            } else {
-                if (recordId != null) {
-                    repo.getRecord(recordId)?.let { repo.deleteRecord(it) }
-                }
-                file?.let { runCatching { it.delete() } }
-                val msg = "錄音存檔未完成（長度 ${elapsed}s / ${fileBytes} bytes${if (!failureReason.isNullOrBlank()) "：$failureReason" else ""}）"
-                Log.w(TAG, msg)
-                _recordingState.value = RecordingState(isRecording = false, errorMessage = msg)
+            } finally {
+                _isFinalizingRecording.value = false
+                stopSelfSafely()
             }
-
-            stopSelfSafely()
         }
     }
 
@@ -413,12 +457,45 @@ class CallRecordingService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("通話已結束（$callerLabel・${EmailFormatter.formatDuration(durationSeconds)}）")
             .setContentText("可錄製口述補充摘要，並選擇 Prompt 開始 AI 分析與寄信。")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(pending)
             .build()
 
         getSystemService(NotificationManager::class.java)
             ?.notify(NOTIFICATION_ID_CONFIRM, notification)
+    }
+
+    private fun showRecordingErrorNotification(message: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) return
+        }
+
+        val openAppIntent = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ID_ERROR,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, TumorRecorderApp.CHANNEL_STATUS)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("通話錄音未啟動或未存檔")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(openAppIntent)
+            .build()
+
+        getSystemService(NotificationManager::class.java)
+            ?.notify(NOTIFICATION_ID_ERROR, notification)
     }
 
     private fun toggleSpeakerphone() {
@@ -472,15 +549,21 @@ class CallRecordingService : Service() {
         }
     }
 
-    private fun startForegroundSafely(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+    private fun startForegroundSafely(notification: Notification): Boolean {
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        }.getOrElse { e ->
+            Log.e(TAG, "startForegroundSafely failed", e)
+            false
         }
     }
 
@@ -549,6 +632,7 @@ class CallRecordingService : Service() {
         private const val TAG = "TumorRecorder_Service"
         private const val NOTIFICATION_ID = 1001
         private const val NOTIFICATION_ID_CONFIRM = 1002
+        private const val NOTIFICATION_ID_ERROR = 1003
 
         const val ACTION_START = "com.tumorrecorder.app.action.START_RECORDING"
         const val ACTION_STOP = "com.tumorrecorder.app.action.STOP_RECORDING"
@@ -561,6 +645,9 @@ class CallRecordingService : Service() {
 
         private val _recordingState = MutableStateFlow(RecordingState())
         val recordingState: StateFlow<RecordingState> = _recordingState.asStateFlow()
+
+        private val _isFinalizingRecording = MutableStateFlow(false)
+        val isFinalizingRecording: StateFlow<Boolean> = _isFinalizingRecording.asStateFlow()
 
         private val _pendingConfirmRecordId = MutableStateFlow<Long?>(null)
         val pendingConfirmRecordId: StateFlow<Long?> = _pendingConfirmRecordId.asStateFlow()

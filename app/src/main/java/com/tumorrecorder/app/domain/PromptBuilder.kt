@@ -4,7 +4,7 @@ import com.tumorrecorder.app.data.local.PromptTemplateEntity
 import com.tumorrecorder.app.domain.model.AppSettings
 
 /**
- * Builds the prompt for AI providers (Gemini / Groq) to transcribe and extract
+ * Builds the prompt for Gemini to transcribe and extract
  * oncology case management (腫瘤個案管理師) call details in Traditional Chinese,
  * supporting user-editable prompt templates, caller identity, covering/substitute role,
  * and optional post-call supplemental voice memos.

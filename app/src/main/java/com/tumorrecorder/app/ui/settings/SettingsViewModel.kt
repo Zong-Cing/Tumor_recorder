@@ -19,9 +19,6 @@ class SettingsViewModel(
     private val _testingGemini = MutableStateFlow(false)
     val testingGemini: StateFlow<Boolean> = _testingGemini.asStateFlow()
 
-    private val _testingGroq = MutableStateFlow(false)
-    val testingGroq: StateFlow<Boolean> = _testingGroq.asStateFlow()
-
     private val _testingEmail = MutableStateFlow(false)
     val testingEmail: StateFlow<Boolean> = _testingEmail.asStateFlow()
 
@@ -43,27 +40,12 @@ class SettingsViewModel(
             }.onFailure { e ->
                 val raw = e.message ?: "請檢查 API Key"
                 _feedbackMessage.value = if (raw.contains("503")) {
-                    "Gemini (${s.geminiModel}) 目前滿載 503，可改選 gemini-3.5-flash-lite 或切換至 Groq 免費版（實際分析時也會自動降級重試）"
+                    "Gemini (${s.geminiModel}) 目前滿載 503，可改選 gemini-3.5-flash-lite（實際分析時也會自動降級重試）"
                 } else {
                     "Gemini 連線失敗：$raw"
                 }
             }
             _testingGemini.value = false
-        }
-    }
-
-    fun testGroqConnection() {
-        val s = settings.value
-        viewModelScope.launch {
-            _testingGroq.value = true
-            runCatching {
-                container.groqService.testConnection(s.groqApiKey, s.groqLlmModel)
-            }.onSuccess { reply ->
-                _feedbackMessage.value = "Groq API 測試成功：$reply"
-            }.onFailure { e ->
-                _feedbackMessage.value = "Groq 連線失敗：${e.message ?: "請檢查 Groq API Key"}"
-            }
-            _testingGroq.value = false
         }
     }
 

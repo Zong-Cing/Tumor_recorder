@@ -1,15 +1,5 @@
 package com.tumorrecorder.app.domain.model
 
-enum class AiProvider(val label: String) {
-    GEMINI("Google Gemini"),
-    GROQ("Groq 免費版 (Whisper + Qwen/GPT-OSS)");
-
-    companion object {
-        fun fromName(name: String?): AiProvider =
-            entries.firstOrNull { it.name == name } ?: GEMINI
-    }
-}
-
 enum class RecordingAudioSource(
     val label: String,
     val description: String
@@ -50,12 +40,8 @@ data class AppSettings(
     val autoSendEmailAfterSummary: Boolean = true,
     val attachAudioToEmail: Boolean = false,
     val deleteAudioAfterEmailSent: Boolean = false,
-    val aiProvider: AiProvider = AiProvider.GEMINI,
     val geminiApiKey: String = "",
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
-    val groqApiKey: String = "",
-    val groqSttModel: String = DEFAULT_GROQ_STT_MODEL,
-    val groqLlmModel: String = DEFAULT_GROQ_LLM_MODEL,
     val customPromptAppendix: String = "",
     val smtpHost: String = DEFAULT_SMTP_HOST,
     val smtpPort: Int = DEFAULT_SMTP_PORT,
@@ -67,14 +53,8 @@ data class AppSettings(
     val isGeminiConfigured: Boolean
         get() = geminiApiKey.isNotBlank()
 
-    val isGroqConfigured: Boolean
-        get() = groqApiKey.isNotBlank()
-
     val isAiConfigured: Boolean
-        get() = when (aiProvider) {
-            AiProvider.GEMINI -> isGeminiConfigured
-            AiProvider.GROQ -> isGroqConfigured
-        }
+        get() = isGeminiConfigured
 
     val isEmailConfigured: Boolean
         get() = senderEmail.isNotBlank() &&
@@ -89,8 +69,6 @@ data class AppSettings(
 
     companion object {
         const val DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen"
-        const val DEFAULT_GROQ_STT_MODEL = "whisper-large-v3-turbo"
-        const val DEFAULT_GROQ_LLM_MODEL = "qwen/qwen3.8-27b"
         const val DEFAULT_SMTP_HOST = "smtp.gmail.com"
         const val DEFAULT_SMTP_PORT = 587
     }

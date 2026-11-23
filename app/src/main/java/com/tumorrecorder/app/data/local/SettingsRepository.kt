@@ -41,20 +41,10 @@ class SettingsRepository(context: Context) {
             autoSendEmailAfterSummary = prefs.getBoolean(KEY_AUTO_EMAIL, true),
             attachAudioToEmail = prefs.getBoolean(KEY_ATTACH_AUDIO, false),
             deleteAudioAfterEmailSent = prefs.getBoolean(KEY_DELETE_AUDIO_AFTER_EMAIL, false),
-            aiProvider = com.tumorrecorder.app.domain.model.AiProvider.fromName(
-                prefs.getString(KEY_AI_PROVIDER, null)
-            ),
             geminiApiKey = prefs.getString(KEY_GEMINI_API_KEY, "") ?: "",
             geminiModel = prefs.getString(KEY_GEMINI_MODEL, AppSettings.DEFAULT_GEMINI_MODEL)
                 ?.ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
                 ?: AppSettings.DEFAULT_GEMINI_MODEL,
-            groqApiKey = prefs.getString(KEY_GROQ_API_KEY, "") ?: "",
-            groqSttModel = prefs.getString(KEY_GROQ_STT_MODEL, AppSettings.DEFAULT_GROQ_STT_MODEL)
-                ?.ifBlank { AppSettings.DEFAULT_GROQ_STT_MODEL }
-                ?: AppSettings.DEFAULT_GROQ_STT_MODEL,
-            groqLlmModel = prefs.getString(KEY_GROQ_LLM_MODEL, AppSettings.DEFAULT_GROQ_LLM_MODEL)
-                ?.ifBlank { AppSettings.DEFAULT_GROQ_LLM_MODEL }
-                ?: AppSettings.DEFAULT_GROQ_LLM_MODEL,
             customPromptAppendix = prefs.getString(KEY_CUSTOM_PROMPT, "") ?: "",
             smtpHost = prefs.getString(KEY_SMTP_HOST, AppSettings.DEFAULT_SMTP_HOST)
                 ?.ifBlank { AppSettings.DEFAULT_SMTP_HOST }
@@ -79,12 +69,8 @@ class SettingsRepository(context: Context) {
             .putBoolean(KEY_AUTO_EMAIL, s.autoSendEmailAfterSummary)
             .putBoolean(KEY_ATTACH_AUDIO, s.attachAudioToEmail)
             .putBoolean(KEY_DELETE_AUDIO_AFTER_EMAIL, s.deleteAudioAfterEmailSent)
-            .putString(KEY_AI_PROVIDER, s.aiProvider.name)
             .putString(KEY_GEMINI_API_KEY, s.geminiApiKey.trim())
             .putString(KEY_GEMINI_MODEL, s.geminiModel.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL })
-            .putString(KEY_GROQ_API_KEY, s.groqApiKey.trim())
-            .putString(KEY_GROQ_STT_MODEL, s.groqSttModel.trim().ifBlank { AppSettings.DEFAULT_GROQ_STT_MODEL })
-            .putString(KEY_GROQ_LLM_MODEL, s.groqLlmModel.trim().ifBlank { AppSettings.DEFAULT_GROQ_LLM_MODEL })
             .putString(KEY_CUSTOM_PROMPT, s.customPromptAppendix)
             .putString(KEY_SMTP_HOST, s.smtpHost.trim().ifBlank { AppSettings.DEFAULT_SMTP_HOST })
             .putInt(KEY_SMTP_PORT, s.smtpPort)
@@ -125,12 +111,8 @@ class SettingsRepository(context: Context) {
         private const val KEY_AUTO_EMAIL = "auto_send_email"
         private const val KEY_ATTACH_AUDIO = "attach_audio_to_email"
         private const val KEY_DELETE_AUDIO_AFTER_EMAIL = "delete_audio_after_email"
-        private const val KEY_AI_PROVIDER = "ai_provider"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
         private const val KEY_GEMINI_MODEL = "gemini_model"
-        private const val KEY_GROQ_API_KEY = "groq_api_key"
-        private const val KEY_GROQ_STT_MODEL = "groq_stt_model"
-        private const val KEY_GROQ_LLM_MODEL = "groq_llm_model"
         private const val KEY_CUSTOM_PROMPT = "custom_prompt_appendix"
         private const val KEY_SMTP_HOST = "smtp_host"
         private const val KEY_SMTP_PORT = "smtp_port"

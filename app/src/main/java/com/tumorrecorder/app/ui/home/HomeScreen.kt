@@ -237,15 +237,7 @@ fun HomeScreen(
             if (!settings.isAiConfigured || !settings.isEmailConfigured) {
                 item(key = "config_banner") {
                     val missing = buildList {
-                        if (!settings.isAiConfigured) {
-                            add(
-                                if (settings.aiProvider == com.tumorrecorder.app.domain.model.AiProvider.GROQ) {
-                                    "Groq API Key"
-                                } else {
-                                    "Gemini API Key"
-                                }
-                            )
-                        }
+                        if (!settings.isAiConfigured) add("Gemini API Key")
                         if (!settings.isEmailConfigured) add("Gmail SMTP 自動寄信")
                     }.joinToString("、")
                     SetupWarningCard(

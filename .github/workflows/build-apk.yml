@@ -32,9 +32,19 @@ jobs:
       - name: Assemble Debug APK
         run: ./gradlew assembleDebug
 
+      - name: Rename Debug APK with version
+        id: version
+        run: |
+          VC=$(( GITHUB_RUN_NUMBER + 10 ))
+          VN="1.0.${GITHUB_RUN_NUMBER}"
+          OUT="app/build/outputs/apk/debug/TumorRecorder-v${VN}-vc${VC}-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$OUT"
+          echo "apk_path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=TumorRecorder-v${VN}-vc${VC}-debug-apk" >> "$GITHUB_OUTPUT"
+
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TumorRecorder-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: ${{ steps.version.outputs.artifact_name }}
+          path: ${{ steps.version.outputs.apk_path }}
           if-no-files-found: error

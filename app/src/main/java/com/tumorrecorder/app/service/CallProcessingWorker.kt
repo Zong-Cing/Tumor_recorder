@@ -23,7 +23,7 @@ import java.io.File
 
 /**
  * Reliable background worker that runs:
- *   1. AI audio upload/STT + structured oncology transcription & summary (Gemini or Groq)
+ *   1. Gemini audio upload + structured oncology transcription & summary
  *   2. Persisting structured fields & full transcript to Room DB
  *   3. Automatic Gmail SMTP delivery (if enabled & configured)
  */
@@ -49,10 +49,9 @@ class CallProcessingWorker(
         val promptRepo = app.container.promptTemplateRepository
         val settings = app.container.settingsRepository.currentSettings()
         val geminiService = app.container.geminiService
-        val groqService = app.container.groqService
         val emailService = app.container.emailService
 
-        var record = repo.getRecord(recordId)
+        val record = repo.getRecord(recordId)
         if (record == null) {
             Log.e(TAG, "Record id=$recordId not found in database")
             notifyUser(recordId, "找不到通話紀錄", "資料庫中找不到此筆錄音（id=$recordId）。")
@@ -69,7 +68,6 @@ class CallProcessingWorker(
                 promptRepo = promptRepo,
                 settings = settings,
                 geminiService = geminiService,
-                groqService = groqService,
                 emailService = emailService
             )
         } catch (ce: CancellationException) {
@@ -100,25 +98,19 @@ class CallProcessingWorker(
         promptRepo: com.tumorrecorder.app.data.repository.PromptTemplateRepository,
         settings: com.tumorrecorder.app.domain.model.AppSettings,
         geminiService: com.tumorrecorder.app.data.remote.GeminiService,
-        groqService: com.tumorrecorder.app.data.remote.GroqService,
         emailService: com.tumorrecorder.app.data.remote.EmailService
     ): Result {
         var record = initialRecord
 
-        if (!settings.isAiConfigured) {
-            val missingName = if (settings.aiProvider == com.tumorrecorder.app.domain.model.AiProvider.GROQ) {
-                "Groq API Key"
-            } else {
-                "Gemini API Key"
-            }
-            Log.w(TAG, "AI not configured ($missingName) for recordId=$recordId")
+        if (!settings.isGeminiConfigured) {
+            Log.w(TAG, "Gemini API Key not configured for recordId=$recordId")
             repo.updateRecord(
                 record.copy(
                     status = ProcessingStatus.FAILED.name,
-                    errorMessage = "尚未設定 $missingName，請先至「設定」填寫後再點擊重新分析。"
+                    errorMessage = "尚未設定 Gemini API Key，請先至「設定」填寫後再點擊重新分析。"
                 )
             )
-            notifyUser(recordId, "無法進行 AI 摘要", "請先至設定頁填入 $missingName。")
+            notifyUser(recordId, "無法進行 AI 摘要", "請先至設定頁填入 Gemini API Key。")
             return Result.failure()
         }
 
@@ -130,7 +122,7 @@ class CallProcessingWorker(
             ?.takeIf { it.exists() && it.length() > 0L }
         Log.i(
             TAG,
-            "Loaded recordId=$recordId provider=${settings.aiProvider.name} audio=${audioFile.absolutePath} " +
+            "Loaded recordId=$recordId model=${settings.geminiModel} audio=${audioFile.absolutePath} " +
                 "bytes=$audioLength hasSupplement=${supplementFile != null} supplementBytes=${supplementFile?.length() ?: 0L}"
         )
         if (!audioFile.exists() || audioLength == 0L) {
@@ -151,7 +143,7 @@ class CallProcessingWorker(
             promptRepo.getDefaultOrFirst()
         }
 
-        // Step 1: Transcribe & Summarize via chosen AI provider (Gemini or Groq)
+        // Step 1: Transcribe & Summarize via Gemini
         record = record.copy(
             status = ProcessingStatus.TRANSCRIBING.name,
             promptTemplateName = chosenTemplate.name,
@@ -162,30 +154,15 @@ class CallProcessingWorker(
         val summaryResult = try {
             val callTimeDisplay = EmailFormatter.formatTimestamp(record.startedAtMillis)
             val mime = record.audioMimeType.ifBlank { "audio/mp4" }
-            when (settings.aiProvider) {
-                com.tumorrecorder.app.domain.model.AiProvider.GROQ -> {
-                    groqService.transcribeAndSummarize(
-                        audioFile = audioFile,
-                        mimeType = mime,
-                        phoneNumber = record.phoneNumber,
-                        callTimeDisplay = callTimeDisplay,
-                        settings = settings,
-                        promptTemplate = chosenTemplate,
-                        supplementAudioFile = supplementFile
-                    )
-                }
-                com.tumorrecorder.app.domain.model.AiProvider.GEMINI -> {
-                    geminiService.transcribeAndSummarize(
-                        audioFile = audioFile,
-                        mimeType = mime,
-                        phoneNumber = record.phoneNumber,
-                        callTimeDisplay = callTimeDisplay,
-                        settings = settings,
-                        promptTemplate = chosenTemplate,
-                        supplementAudioFile = supplementFile
-                    )
-                }
-            }
+            geminiService.transcribeAndSummarize(
+                audioFile = audioFile,
+                mimeType = mime,
+                phoneNumber = record.phoneNumber,
+                callTimeDisplay = callTimeDisplay,
+                settings = settings,
+                promptTemplate = chosenTemplate,
+                supplementAudioFile = supplementFile
+            )
         } catch (e: Exception) {
             Log.e(TAG, "AI processing failed for record $recordId: ${e.message}", e)
             repo.updateRecord(

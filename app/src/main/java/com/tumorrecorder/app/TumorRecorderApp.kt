@@ -94,7 +94,6 @@ class AppContainer(application: Application) {
     val database: AppDatabase = AppDatabase.getInstance(application)
     val settingsRepository: SettingsRepository = SettingsRepository(application)
     val geminiService: GeminiService = GeminiService()
-    val groqService: com.tumorrecorder.app.data.remote.GroqService = com.tumorrecorder.app.data.remote.GroqService()
     val emailService: EmailService = EmailService()
     val promptTemplateRepository: com.tumorrecorder.app.data.repository.PromptTemplateRepository =
         com.tumorrecorder.app.data.repository.PromptTemplateRepository(database.promptTemplateDao())

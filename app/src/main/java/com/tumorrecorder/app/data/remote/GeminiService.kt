@@ -282,7 +282,7 @@ class GeminiService(
                 delay(1000L)
             }
         }
-        throw lastError ?: IOException("Gemini 摘要產生失敗（伺服器滿載 503），建議至設定頁改選 gemini-3.5-flash-lite 或 Groq 免費版。")
+        throw lastError ?: IOException("Gemini 摘要產生失敗（伺服器滿載 503），建議至設定頁改選 gemini-3.5-flash-lite 後再重試。")
     }
 
     private fun deleteUploadedFile(fileName: String, apiKey: String) {

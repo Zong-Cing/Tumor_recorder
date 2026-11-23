@@ -39,8 +39,10 @@ fun AppNavHost(
     hasRequiredPermissions: Boolean,
     isAccessibilityEnabled: Boolean,
     isDefaultDialer: Boolean,
+    canUseFullScreenIntent: Boolean,
     onRequestPermissions: () -> Unit,
     onRequestDefaultDialer: () -> Unit,
+    onOpenFullScreenIntentSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit
 ) {
@@ -73,8 +75,10 @@ fun AppNavHost(
                 hasRequiredPermissions = hasRequiredPermissions,
                 isAccessibilityEnabled = isAccessibilityEnabled,
                 isDefaultDialer = isDefaultDialer,
+                canUseFullScreenIntent = canUseFullScreenIntent,
                 onRequestPermissions = onRequestPermissions,
                 onRequestDefaultDialer = onRequestDefaultDialer,
+                onOpenFullScreenIntentSettings = onOpenFullScreenIntentSettings,
                 onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 onOpenAppDetailsSettings = onOpenAppDetailsSettings,
                 onOpenRecord = { id -> navController.navigate(Routes.detail(id)) },

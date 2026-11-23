@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
     private var hasRequiredPermissions by mutableStateOf(false)
     private var accessibilityEnabledInSettings by mutableStateOf(false)
     private var isDefaultDialer by mutableStateOf(false)
+    private var canUseFullScreenIntent by mutableStateOf(true)
     private var openRecordId by mutableStateOf<Long?>(null)
     private var incomingDialNumber by mutableStateOf<String?>(null)
 
@@ -61,8 +62,10 @@ class MainActivity : ComponentActivity() {
                     hasRequiredPermissions = hasRequiredPermissions,
                     isAccessibilityEnabled = liveA11yConnected || accessibilityEnabledInSettings,
                     isDefaultDialer = isDefaultDialer,
+                    canUseFullScreenIntent = canUseFullScreenIntent,
                     onRequestPermissions = { requestMissingPermissions() },
                     onRequestDefaultDialer = { requestDefaultDialerRole() },
+                    onOpenFullScreenIntentSettings = { openFullScreenIntentSettings() },
                     onOpenAccessibilitySettings = { openAccessibilitySettings() },
                     onOpenAppDetailsSettings = { openAppDetailsSettings() }
                 )
@@ -84,6 +87,7 @@ class MainActivity : ComponentActivity() {
         hasRequiredPermissions = checkRequiredPermissions()
         accessibilityEnabledInSettings = CallRecorderAccessibilityService.isServiceEnabled(this)
         isDefaultDialer = checkIsDefaultDialer()
+        canUseFullScreenIntent = checkCanUseFullScreenIntent()
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -172,6 +176,31 @@ class MainActivity : ComponentActivity() {
             permissionLauncher.launch(missing.toTypedArray())
         } else {
             hasRequiredPermissions = true
+        }
+    }
+
+    private fun checkCanUseFullScreenIntent(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            getSystemService(android.app.NotificationManager::class.java)?.canUseFullScreenIntent() == true
+        } else {
+            true
+        }
+    }
+
+    private fun openFullScreenIntentSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            runCatching {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                        Uri.fromParts("package", packageName, null)
+                    )
+                )
+            }.onFailure {
+                openAppDetailsSettings()
+            }
+        } else {
+            openAppDetailsSettings()
         }
     }
 

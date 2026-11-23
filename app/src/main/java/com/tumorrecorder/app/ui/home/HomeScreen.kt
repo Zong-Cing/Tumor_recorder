@@ -115,8 +115,10 @@ fun HomeScreen(
     hasRequiredPermissions: Boolean,
     isAccessibilityEnabled: Boolean,
     isDefaultDialer: Boolean,
+    canUseFullScreenIntent: Boolean,
     onRequestPermissions: () -> Unit,
     onRequestDefaultDialer: () -> Unit,
+    onOpenFullScreenIntentSettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onOpenAppDetailsSettings: () -> Unit,
     onOpenRecord: (Long) -> Unit,
@@ -198,6 +200,17 @@ fun HomeScreen(
             if (!isDefaultDialer) {
                 item(key = "default_dialer_banner") {
                     DefaultDialerSetupCard(onRequestDefaultDialer = onRequestDefaultDialer)
+                }
+            }
+
+            if (isDefaultDialer && !canUseFullScreenIntent) {
+                item(key = "fsi_banner") {
+                    SetupWarningCard(
+                        title = "請開啟「全螢幕來電通知」權限",
+                        message = "Android 14 以上需開啟此權限，鎖定畫面有來電時才會自動亮屏彈出接聽畫面，避免漏接電話。",
+                        actionLabel = "開啟全螢幕來電權限",
+                        onAction = onOpenFullScreenIntentSettings
+                    )
                 }
             }
 

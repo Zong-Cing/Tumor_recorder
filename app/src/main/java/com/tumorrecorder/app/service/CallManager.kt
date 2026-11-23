@@ -107,10 +107,15 @@ object CallManager {
 
         val number = call.details?.handle?.schemeSpecificPart.orEmpty()
         val initialState = getCallStateCompat(call)
-        val isIncoming = initialState == Call.STATE_RINGING
+        val isIncoming = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            call.details?.callDirection == Call.Details.DIRECTION_INCOMING || initialState == Call.STATE_RINGING
+        } else {
+            initialState == Call.STATE_RINGING
+        }
+        Log.i(TAG, "onCallAdded: number=$number initialState=$initialState isIncoming=$isIncoming")
 
         val shouldRecord = if (isIncoming) {
-            // Wait for user to tap "接聽並錄音摘要" vs "僅接聽（不錄音）"
+            // Wait for user to tap "接聽並錄音" vs "僅接聽（不錄音）"
             false
         } else {
             val age = System.currentTimeMillis() - pendingOutgoingSetAtMillis
@@ -277,23 +282,24 @@ object CallManager {
                 connectedAtMillis = connectedAt
             )
 
-            val service = inCallService
+            val service = inCallService as? TumorInCallService
+            Log.i(TAG, "onStateChanged: number=$number state=$state isIncoming=${current.isIncoming}")
             when (state) {
+                Call.STATE_RINGING -> {
+                    service?.onCallRinging(number.ifBlank { "未知來電" })
+                }
+
                 Call.STATE_ACTIVE -> {
-                    if (service != null) {
-                        (service as? TumorInCallService)?.cancelIncomingNotification()
-                    }
-                    if (current.shouldRecordThisCall && service != null) {
-                        startRecordingIfNeeded(service, number, current.isIncoming)
+                    service?.onCallActive(number.ifBlank { "通話中" })
+                    if (current.shouldRecordThisCall && inCallService != null) {
+                        startRecordingIfNeeded(inCallService!!, number, current.isIncoming)
                     }
                 }
 
                 Call.STATE_DISCONNECTED -> {
-                    if (service != null) {
-                        (service as? TumorInCallService)?.cancelIncomingNotification()
-                        if (CallRecordingService.recordingState.value.isRecording) {
-                            CallRecordingService.stopRecording(service)
-                        }
+                    service?.cancelCallNotifications()
+                    if (inCallService != null && CallRecordingService.recordingState.value.isRecording) {
+                        CallRecordingService.stopRecording(inCallService!!)
                     }
                 }
             }

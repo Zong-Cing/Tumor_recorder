@@ -52,25 +52,41 @@ class TumorRecorderApp : Application() {
                 description = "通話 AI 摘要完成、寄信成功或失敗通知"
             }
 
+            // Remove legacy incoming call channel that used default notification beep
+            runCatching { nm.deleteNotificationChannel("tumor_recorder_incoming_call") }
+
             val incomingCallChannel = NotificationChannel(
                 CHANNEL_INCOMING_CALL,
                 "來電通話通知",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "作為預設電話 App 時顯示全螢幕來電接聽畫面"
+                description = "作為預設電話 App 時顯示全螢幕來電與橫幅接聽畫面（鈴聲與震動由系統電話自動播放）"
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                setSound(null, null)
+                enableVibration(false)
+            }
+
+            val ongoingCallChannel = NotificationChannel(
+                CHANNEL_ONGOING_CALL,
+                "通話中通知",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "通話進行中時提供快速返回通話畫面與掛斷按鈕"
+                setShowBadge(false)
             }
 
             nm.createNotificationChannel(recordingChannel)
             nm.createNotificationChannel(statusChannel)
             nm.createNotificationChannel(incomingCallChannel)
+            nm.createNotificationChannel(ongoingCallChannel)
         }
     }
 
     companion object {
         const val CHANNEL_RECORDING = "tumor_recorder_recording"
         const val CHANNEL_STATUS = "tumor_recorder_status"
-        const val CHANNEL_INCOMING_CALL = "tumor_recorder_incoming_call"
+        const val CHANNEL_INCOMING_CALL = "tumor_recorder_incoming_call_v2"
+        const val CHANNEL_ONGOING_CALL = "tumor_recorder_ongoing_call"
     }
 }
 

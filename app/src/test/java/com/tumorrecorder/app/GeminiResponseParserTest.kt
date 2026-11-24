@@ -96,4 +96,26 @@ class GeminiResponseParserTest {
         assertEquals("", parsed.transcript)
         assertEquals(1, parsed.actionItems.size)
     }
+
+    @Test
+    fun flexBackoffPolicy_followsExponentialDelaysAndStopsAt30Minutes() {
+        val policy = com.tumorrecorder.app.data.remote.FlexBackoffPolicy
+        assertEquals(30_000L, policy.nextDelayMillis(attempt = 0, elapsedMillis = 0L))
+        assertEquals(60_000L, policy.nextDelayMillis(attempt = 1, elapsedMillis = 35_000L))
+        assertEquals(120_000L, policy.nextDelayMillis(attempt = 2, elapsedMillis = 100_000L))
+        assertEquals(240_000L, policy.nextDelayMillis(attempt = 3, elapsedMillis = 220_000L))
+        assertEquals(480_000L, policy.nextDelayMillis(attempt = 4, elapsedMillis = 460_000L))
+        assertEquals(600_000L, policy.nextDelayMillis(attempt = 5, elapsedMillis = 940_000L))
+
+        // Caps to remaining window before 30 min
+        assertEquals(90_000L, policy.nextDelayMillis(attempt = 5, elapsedMillis = policy.MAX_FLEX_WAIT_MILLIS - 90_000L))
+
+        // Stops retrying and switches to Standard once < 30s left or >= 30 min elapsed
+        org.junit.Assert.assertNull(policy.nextDelayMillis(attempt = 5, elapsedMillis = policy.MAX_FLEX_WAIT_MILLIS - 20_000L))
+        org.junit.Assert.assertNull(policy.nextDelayMillis(attempt = 6, elapsedMillis = policy.MAX_FLEX_WAIT_MILLIS))
+
+        assertEquals("30 秒", policy.formatDelay(30_000L))
+        assertEquals("2 分鐘", policy.formatDelay(120_000L))
+        assertEquals("1 分 30 秒", policy.formatDelay(90_000L))
+    }
 }

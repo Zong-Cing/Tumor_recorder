@@ -17,14 +17,17 @@ import com.tumorrecorder.app.R
 import com.tumorrecorder.app.TumorRecorderApp
 import com.tumorrecorder.app.data.local.CallRecordEntity
 import com.tumorrecorder.app.data.remote.EmailFormatter
+import com.tumorrecorder.app.data.remote.FlexBackoffPolicy
+import com.tumorrecorder.app.data.remote.FlexOverloadedException
+import com.tumorrecorder.app.data.remote.GeminiServiceTier
 import com.tumorrecorder.app.domain.model.ProcessingStatus
 import kotlinx.coroutines.CancellationException
 import java.io.File
 
 /**
  * Reliable background worker that runs:
- *   1. Gemini audio upload + structured oncology transcription & summary
- *   2. Persisting structured fields & full transcript to Room DB
+ *   1. Gemini audio upload + structured oncology summary (with Flex 50% off + 30-min exponential backoff -> Standard fallback)
+ *   2. Persisting structured fields & optional transcript to Room DB
  *   3. Automatic Gmail SMTP delivery (if enabled & configured)
  */
 class CallProcessingWorker(
@@ -36,11 +39,15 @@ class CallProcessingWorker(
         val recordId = inputData.getLong(KEY_RECORD_ID, -1L)
         val promptTemplateId = inputData.getLong(KEY_PROMPT_TEMPLATE_ID, -1L)
         val forceEmail = inputData.getBoolean(KEY_FORCE_EMAIL, false)
+        val forceStandardTier = inputData.getBoolean(KEY_FORCE_STANDARD, false)
+        val flexAttempt = inputData.getInt(KEY_FLEX_ATTEMPT, 0)
+        val flexStartedAtInput = inputData.getLong(KEY_FLEX_STARTED_AT_MILLIS, 0L)
         val hasExplicitTranscriptFlag = inputData.keyValueMap.containsKey(KEY_INCLUDE_TRANSCRIPT)
         val explicitIncludeTranscript = inputData.getBoolean(KEY_INCLUDE_TRANSCRIPT, false)
         Log.i(
             TAG,
             "doWork start: recordId=$recordId promptTemplateId=$promptTemplateId forceEmail=$forceEmail " +
+                "forceStandard=$forceStandardTier flexAttempt=$flexAttempt " +
                 "includeTranscriptOverride=${if (hasExplicitTranscriptFlag) explicitIncludeTranscript else "default"}"
         )
 
@@ -75,6 +82,9 @@ class CallProcessingWorker(
                 promptTemplateId = promptTemplateId,
                 forceEmail = forceEmail,
                 includeTranscript = includeTranscript,
+                forceStandardTier = forceStandardTier,
+                flexAttempt = flexAttempt,
+                flexStartedAtInput = flexStartedAtInput,
                 initialRecord = record,
                 repo = repo,
                 promptRepo = promptRepo,
@@ -83,6 +93,7 @@ class CallProcessingWorker(
                 emailService = emailService
             )
         } catch (ce: CancellationException) {
+            Log.i(TAG, "Worker cancelled for recordId=$recordId (likely switched to Standard tier or replaced)")
             throw ce
         } catch (t: Throwable) {
             Log.e(TAG, "Uncaught failure while processing record $recordId", t)
@@ -106,6 +117,9 @@ class CallProcessingWorker(
         promptTemplateId: Long,
         forceEmail: Boolean,
         includeTranscript: Boolean,
+        forceStandardTier: Boolean,
+        flexAttempt: Int,
+        flexStartedAtInput: Long,
         initialRecord: CallRecordEntity,
         repo: com.tumorrecorder.app.data.repository.CallRecordRepository,
         promptRepo: com.tumorrecorder.app.data.repository.PromptTemplateRepository,
@@ -133,11 +147,18 @@ class CallProcessingWorker(
             .takeIf { it.isNotBlank() }
             ?.let(::File)
             ?.takeIf { it.exists() && it.length() > 0L }
+        val flexStartedAt = if (flexStartedAtInput > 0L) flexStartedAtInput else System.currentTimeMillis()
+        val elapsedMillis = (System.currentTimeMillis() - flexStartedAt).coerceAtLeast(0L)
+        val useFlexThisRun = settings.useFlexTier &&
+            !forceStandardTier &&
+            elapsedMillis < FlexBackoffPolicy.MAX_FLEX_WAIT_MILLIS
+
         Log.i(
             TAG,
             "Loaded recordId=$recordId model=${settings.geminiModel} thinking=${settings.geminiThinkingLevel} " +
+                "useFlex=$useFlexThisRun flexAttempt=$flexAttempt elapsedSec=${elapsedMillis / 1000L} " +
                 "includeTranscript=$includeTranscript audio=${audioFile.absolutePath} " +
-                "bytes=$audioLength hasSupplement=${supplementFile != null} supplementBytes=${supplementFile?.length() ?: 0L}"
+                "bytes=$audioLength hasSupplement=${supplementFile != null}"
         )
         if (!audioFile.exists() || audioLength == 0L) {
             Log.e(TAG, "Audio file missing or empty for recordId=$recordId path=${record.audioFilePath}")
@@ -151,43 +172,150 @@ class CallProcessingWorker(
             return Result.failure()
         }
 
-        val chosenTemplate = if (promptTemplateId > 0L) {
-            promptRepo.getById(promptTemplateId) ?: promptRepo.getDefaultOrFirst()
-        } else {
-            promptRepo.getDefaultOrFirst()
+        val chosenTemplate = when {
+            promptTemplateId > 0L -> promptRepo.getById(promptTemplateId) ?: promptRepo.getDefaultOrFirst()
+            record.promptTemplateName.isNotBlank() ->
+                promptRepo.getAll().firstOrNull { it.name == record.promptTemplateName }
+                    ?: promptRepo.getDefaultOrFirst()
+            else -> promptRepo.getDefaultOrFirst()
         }
 
-        // Step 1: Summarize (and optionally transcribe) via Gemini
-        record = record.copy(
-            status = ProcessingStatus.TRANSCRIBING.name,
-            promptTemplateName = chosenTemplate.name,
-            errorMessage = null
-        )
-        repo.updateRecord(record)
+        val callTimeDisplay = EmailFormatter.formatTimestamp(record.startedAtMillis)
+        val mime = record.audioMimeType.ifBlank { "audio/mp4" }
 
-        val summaryResult = try {
-            val callTimeDisplay = EmailFormatter.formatTimestamp(record.startedAtMillis)
-            val mime = record.audioMimeType.ifBlank { "audio/mp4" }
-            geminiService.transcribeAndSummarize(
-                audioFile = audioFile,
-                mimeType = mime,
-                phoneNumber = record.phoneNumber,
-                callTimeDisplay = callTimeDisplay,
-                settings = settings,
-                promptTemplate = chosenTemplate,
-                supplementAudioFile = supplementFile,
-                includeTranscript = includeTranscript
+        // Step 1: Summarize (and optionally transcribe) via Gemini — Flex first with 30-min exponential backoff -> Standard
+        val summaryResult = if (useFlexThisRun) {
+            val attemptText = if (flexAttempt == 0) {
+                "正在使用 Flex 半價層分析中（省 50% 費用；若不想等待可隨時點「改用標準層」立即分析）"
+            } else {
+                val elapsedMin = (elapsedMillis / 60_000L).coerceAtLeast(1L)
+                "Flex 半價層第 ${flexAttempt + 1} 次自動重試中（已排隊約 ${elapsedMin} 分鐘，滿 30 分鐘將自動切回標準層）"
+            }
+            record = record.copy(
+                status = ProcessingStatus.WAITING_FLEX.name,
+                promptTemplateName = chosenTemplate.name,
+                errorMessage = attemptText
             )
-        } catch (e: Exception) {
-            Log.e(TAG, "AI processing failed for record $recordId: ${e.message}", e)
-            repo.updateRecord(
-                record.copy(
-                    status = ProcessingStatus.FAILED.name,
-                    errorMessage = "AI 分析失敗：${e.message ?: "請檢查網路或 API Key"}"
+            repo.updateRecord(record)
+
+            try {
+                geminiService.transcribeAndSummarize(
+                    audioFile = audioFile,
+                    mimeType = mime,
+                    phoneNumber = record.phoneNumber,
+                    callTimeDisplay = callTimeDisplay,
+                    settings = settings,
+                    promptTemplate = chosenTemplate,
+                    supplementAudioFile = supplementFile,
+                    includeTranscript = includeTranscript,
+                    serviceTier = GeminiServiceTier.FLEX
                 )
+            } catch (foe: FlexOverloadedException) {
+                val elapsedNow = (System.currentTimeMillis() - flexStartedAt).coerceAtLeast(0L)
+                val nextDelayMs = FlexBackoffPolicy.nextDelayMillis(flexAttempt, elapsedNow)
+                if (nextDelayMs != null) {
+                    val waitLabel = FlexBackoffPolicy.formatDelay(nextDelayMs)
+                    val remainingMin = ((FlexBackoffPolicy.MAX_FLEX_WAIT_MILLIS - elapsedNow) / 60_000L).coerceAtLeast(1L)
+                    Log.w(TAG, "Flex overloaded on attempt $flexAttempt for record $recordId; retrying in $waitLabel")
+                    repo.updateRecord(
+                        record.copy(
+                            status = ProcessingStatus.WAITING_FLEX.name,
+                            promptTemplateName = chosenTemplate.name,
+                            errorMessage = "Flex 半價層暫時滿載 (503)，將於 $waitLabel 後自動重試（第 ${flexAttempt + 1} 次；約 $remainingMin 分鐘後自動切標準層，或可隨時點「改用標準層」立即完成）"
+                        )
+                    )
+                    repo.enqueueProcessing(
+                        recordId = recordId,
+                        promptTemplateId = chosenTemplate.id,
+                        forceSendEmail = forceEmail,
+                        includeTranscript = includeTranscript,
+                        forceStandardTier = false,
+                        flexAttempt = flexAttempt + 1,
+                        flexStartedAtMillis = flexStartedAt,
+                        initialDelayMillis = nextDelayMs,
+                        appendInsteadOfReplace = true
+                    )
+                    return Result.success()
+                }
+
+                // 30-minute Flex window exhausted -> fall back automatically to Standard right now!
+                Log.i(TAG, "Flex 30-minute window exhausted for record $recordId; switching automatically to Standard tier")
+                record = record.copy(
+                    status = ProcessingStatus.TRANSCRIBING.name,
+                    promptTemplateName = chosenTemplate.name,
+                    errorMessage = null
+                )
+                repo.updateRecord(record)
+                try {
+                    geminiService.transcribeAndSummarize(
+                        audioFile = audioFile,
+                        mimeType = mime,
+                        phoneNumber = record.phoneNumber,
+                        callTimeDisplay = callTimeDisplay,
+                        settings = settings,
+                        promptTemplate = chosenTemplate,
+                        supplementAudioFile = supplementFile,
+                        includeTranscript = includeTranscript,
+                        serviceTier = GeminiServiceTier.STANDARD
+                    )
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Log.e(TAG, "Standard fallback failed for record $recordId: ${e.message}", e)
+                    repo.updateRecord(
+                        record.copy(
+                            status = ProcessingStatus.FAILED.name,
+                            errorMessage = "AI 分析失敗：${e.message ?: "請檢查網路或 API Key"}"
+                        )
+                    )
+                    notifyUser(recordId, "通話 AI 摘要失敗", e.message ?: "請開啟 App 檢視並重試。")
+                    return Result.failure()
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                Log.e(TAG, "AI processing failed on Flex for record $recordId: ${e.message}", e)
+                repo.updateRecord(
+                    record.copy(
+                        status = ProcessingStatus.FAILED.name,
+                        errorMessage = "AI 分析失敗：${e.message ?: "請檢查網路或 API Key"}"
+                    )
+                )
+                notifyUser(recordId, "通話 AI 摘要失敗", e.message ?: "請開啟 App 檢視並重試。")
+                return Result.failure()
+            }
+        } else {
+            record = record.copy(
+                status = ProcessingStatus.TRANSCRIBING.name,
+                promptTemplateName = chosenTemplate.name,
+                errorMessage = null
             )
-            notifyUser(recordId, "通話 AI 摘要失敗", e.message ?: "請開啟 App 檢視並重試。")
-            return Result.failure()
+            repo.updateRecord(record)
+
+            try {
+                geminiService.transcribeAndSummarize(
+                    audioFile = audioFile,
+                    mimeType = mime,
+                    phoneNumber = record.phoneNumber,
+                    callTimeDisplay = callTimeDisplay,
+                    settings = settings,
+                    promptTemplate = chosenTemplate,
+                    supplementAudioFile = supplementFile,
+                    includeTranscript = includeTranscript,
+                    serviceTier = GeminiServiceTier.STANDARD
+                )
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                Log.e(TAG, "AI processing failed for record $recordId: ${e.message}", e)
+                repo.updateRecord(
+                    record.copy(
+                        status = ProcessingStatus.FAILED.name,
+                        errorMessage = "AI 分析失敗：${e.message ?: "請檢查網路或 API Key"}"
+                    )
+                )
+                notifyUser(recordId, "通話 AI 摘要失敗", e.message ?: "請開啟 App 檢視並重試。")
+                return Result.failure()
+            }
         }
 
         // Step 2: Persist extracted oncology case manager details (preserving in-call quick notes & any existing transcript)
@@ -322,5 +450,8 @@ class CallProcessingWorker(
         const val KEY_PROMPT_TEMPLATE_ID = "prompt_template_id"
         const val KEY_FORCE_EMAIL = "force_email"
         const val KEY_INCLUDE_TRANSCRIPT = "include_transcript"
+        const val KEY_FORCE_STANDARD = "force_standard_tier"
+        const val KEY_FLEX_ATTEMPT = "flex_attempt"
+        const val KEY_FLEX_STARTED_AT_MILLIS = "flex_started_at_millis"
     }
 }

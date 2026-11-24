@@ -49,6 +49,7 @@ class SettingsRepository(context: Context) {
                 prefs.getString(KEY_GEMINI_THINKING_LEVEL, null)
             ),
             generateTranscriptByDefault = prefs.getBoolean(KEY_GENERATE_TRANSCRIPT_DEFAULT, false),
+            useFlexTier = prefs.getBoolean(KEY_USE_FLEX_TIER, true),
             customPromptAppendix = prefs.getString(KEY_CUSTOM_PROMPT, "") ?: "",
             smtpHost = prefs.getString(KEY_SMTP_HOST, AppSettings.DEFAULT_SMTP_HOST)
                 ?.ifBlank { AppSettings.DEFAULT_SMTP_HOST }
@@ -77,6 +78,7 @@ class SettingsRepository(context: Context) {
             .putString(KEY_GEMINI_MODEL, s.geminiModel.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL })
             .putString(KEY_GEMINI_THINKING_LEVEL, s.geminiThinkingLevel.name)
             .putBoolean(KEY_GENERATE_TRANSCRIPT_DEFAULT, s.generateTranscriptByDefault)
+            .putBoolean(KEY_USE_FLEX_TIER, s.useFlexTier)
             .putString(KEY_CUSTOM_PROMPT, s.customPromptAppendix)
             .putString(KEY_SMTP_HOST, s.smtpHost.trim().ifBlank { AppSettings.DEFAULT_SMTP_HOST })
             .putInt(KEY_SMTP_PORT, s.smtpPort)
@@ -121,6 +123,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_GEMINI_MODEL = "gemini_model"
         private const val KEY_GEMINI_THINKING_LEVEL = "gemini_thinking_level"
         private const val KEY_GENERATE_TRANSCRIPT_DEFAULT = "generate_transcript_default"
+        private const val KEY_USE_FLEX_TIER = "use_flex_tier"
         private const val KEY_CUSTOM_PROMPT = "custom_prompt_appendix"
         private const val KEY_SMTP_HOST = "smtp_host"
         private const val KEY_SMTP_PORT = "smtp_port"

@@ -3,6 +3,7 @@ package com.tumorrecorder.app.domain.model
 enum class ProcessingStatus(val label: String) {
     RECORDING("錄音中"),
     PENDING("待確認分析"),
+    WAITING_FLEX("Flex 半價排隊中"),
     TRANSCRIBING("AI 轉錄與摘要中"),
     SENDING_EMAIL("寄送郵件中"),
     COMPLETED("已完成"),

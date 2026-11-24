@@ -435,6 +435,7 @@ fun HomeScreen(
         var includeTranscript by remember(confirmRecord.id, settings.generateTranscriptByDefault) {
             mutableStateOf(settings.generateTranscriptByDefault)
         }
+        var forceStandardTier by remember(confirmRecord.id) { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { viewModel.dismissConfirmKeepRecord() },
             title = { Text("通話已結束，選擇分析 Prompt") },
@@ -471,6 +472,24 @@ fun HomeScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                    if (settings.useFlexTier) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { forceStandardTier = !forceStandardTier }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = forceStandardTier,
+                                onCheckedChange = { forceStandardTier = it }
+                            )
+                            Text(
+                                text = "急件：直接用標準層（不等 Flex 半價）",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -502,11 +521,12 @@ fun HomeScreen(
                         viewModel.confirmAnalyzeNow(
                             recordId = confirmRecord.id,
                             promptTemplateId = selectedPromptId ?: -1L,
-                            includeTranscript = includeTranscript
+                            includeTranscript = includeTranscript,
+                            forceStandardTier = forceStandardTier
                         )
                     }
                 ) {
-                    Text("開始分析並寄信")
+                    Text(if (settings.useFlexTier && !forceStandardTier) "Flex 半價分析並寄信" else "開始分析並寄信")
                 }
             },
             dismissButton = {

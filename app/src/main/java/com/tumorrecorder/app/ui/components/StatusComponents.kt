@@ -31,6 +31,7 @@ fun StatusBadge(status: ProcessingStatus, modifier: Modifier = Modifier) {
     val (bg, fg, loading) = when (status) {
         ProcessingStatus.RECORDING -> Triple(UrgentRedContainer, UrgentRed, true)
         ProcessingStatus.PENDING -> Triple(WarningAmberContainer, WarningAmber, false)
+        ProcessingStatus.WAITING_FLEX -> Triple(WarningAmberContainer, WarningAmber, true)
         ProcessingStatus.TRANSCRIBING -> Triple(MedicalTealLight, MedicalTeal, true)
         ProcessingStatus.SENDING_EMAIL -> Triple(MedicalTealLight, MedicalTeal, true)
         ProcessingStatus.COMPLETED -> Triple(SuccessGreenContainer, SuccessGreen, false)

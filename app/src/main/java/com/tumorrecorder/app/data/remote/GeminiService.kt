@@ -8,6 +8,7 @@ import com.tumorrecorder.app.domain.model.GeminiThinkingLevel
 import com.tumorrecorder.app.domain.model.OncologySummaryResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -20,14 +21,59 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import java.io.File
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+enum class GeminiServiceTier(val apiValue: String?) {
+    STANDARD(null),
+    FLEX("flex")
+}
+
+class FlexOverloadedException(
+    message: String,
+    cause: Throwable? = null
+) : IOException(message, cause)
+
+object FlexBackoffPolicy {
+    const val MAX_FLEX_WAIT_MILLIS: Long = 30L * 60L * 1000L // 30 minutes
+    private const val MIN_REMAINING_FOR_RETRY_MILLIS: Long = 30_000L
+    private val DELAYS_SECONDS = longArrayOf(30L, 60L, 120L, 240L, 480L, 600L)
+
+    /**
+     * Returns the exponential backoff delay in milliseconds for the next Flex retry,
+     * or null when the 30-minute Flex wait budget has been exhausted (caller should switch to Standard).
+     */
+    fun nextDelayMillis(attempt: Int, elapsedMillis: Long): Long? {
+        val remaining = MAX_FLEX_WAIT_MILLIS - elapsedMillis.coerceAtLeast(0L)
+        if (remaining < MIN_REMAINING_FOR_RETRY_MILLIS) return null
+        val idx = attempt.coerceIn(0, DELAYS_SECONDS.lastIndex)
+        val rawDelay = DELAYS_SECONDS[idx] * 1000L
+        return minOf(rawDelay, remaining).coerceAtLeast(15_000L)
+    }
+
+    fun formatDelay(delayMillis: Long): String {
+        val totalSec = (delayMillis / 1000L).coerceAtLeast(1L)
+        val mins = totalSec / 60L
+        val secs = totalSec % 60L
+        return when {
+            mins > 0L && secs > 0L -> "${mins} 分 ${secs} 秒"
+            mins > 0L -> "${mins} 分鐘"
+            else -> "${secs} 秒"
+        }
+    }
+}
 
 class GeminiService(
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -36,6 +82,18 @@ class GeminiService(
         .readTimeout(240, TimeUnit.SECONDS)
         .build()
 ) {
+    private val flexClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(600, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private val quickFlexClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(90, TimeUnit.SECONDS)
+            .build()
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -45,6 +103,9 @@ class GeminiService(
     /**
      * Uploads audio via Gemini Files API, requests structured summary (with optional transcript),
      * and deletes temporary remote files in finally for medical privacy.
+     *
+     * When [serviceTier] is [GeminiServiceTier.FLEX], throws [FlexOverloadedException] on 503/429/500
+     * or timeout so the caller can perform exponential backoff retry and auto-fallback to Standard.
      */
     suspend fun transcribeAndSummarize(
         audioFile: File,
@@ -54,7 +115,8 @@ class GeminiService(
         settings: AppSettings,
         promptTemplate: PromptTemplateEntity? = null,
         supplementAudioFile: File? = null,
-        includeTranscript: Boolean = settings.generateTranscriptByDefault
+        includeTranscript: Boolean = settings.generateTranscriptByDefault,
+        serviceTier: GeminiServiceTier = GeminiServiceTier.STANDARD
     ): OncologySummaryResult = withContext(Dispatchers.IO) {
         val apiKey = settings.geminiApiKey.trim()
         require(apiKey.isNotEmpty()) { "尚未設定 Gemini API Key，請先至「設定」頁面填入。" }
@@ -86,6 +148,7 @@ class GeminiService(
                 model = settings.geminiModel,
                 thinkingLevel = settings.geminiThinkingLevel,
                 includeTranscript = includeTranscript,
+                serviceTier = serviceTier,
                 apiKey = apiKey
             )
         } finally {
@@ -98,6 +161,8 @@ class GeminiService(
 
     /**
      * On-demand full verbatim transcription without overwriting existing structured summary.
+     * If Flex tier is enabled in settings, tries 1 quick Flex attempt (90s) and falls back
+     * immediately to Standard on overload so the interactive UI stays responsive.
      */
     suspend fun transcribeOnly(
         audioFile: File,
@@ -134,6 +199,7 @@ class GeminiService(
                 prompt = prompt,
                 model = settings.geminiModel,
                 thinkingLevel = settings.geminiThinkingLevel,
+                tryQuickFlexFirst = settings.useFlexTier,
                 apiKey = apiKey
             )
         } finally {
@@ -272,15 +338,10 @@ class GeminiService(
         model: String,
         thinkingLevel: GeminiThinkingLevel,
         includeTranscript: Boolean,
+        serviceTier: GeminiServiceTier,
         apiKey: String
     ): OncologySummaryResult {
         val primaryModel = model.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
-        val candidateModels = listOf(
-            primaryModel,
-            "gemini-3.8-flash",
-            "gemini-3.5-flash-lite"
-        ).distinct()
-
         val contentsArray = buildAudioContents(
             fileUri = fileUri,
             mimeType = mimeType,
@@ -289,21 +350,73 @@ class GeminiService(
         )
         val responseSchema = buildResponseSchema(includeTranscript = includeTranscript)
 
+        // When Flex tier is requested, try the primary model on Flex with 600s read timeout.
+        // If Flex is overloaded (503/429/500 or timeout), throw FlexOverloadedException so
+        // WorkManager performs exponential backoff retry up to 30 min before switching to Standard.
+        if (serviceTier == GeminiServiceTier.FLEX) {
+            val apiThinkingLevel = thinkingLevel.resolveApiThinkingLevel(primaryModel)
+            val flexPayload = buildSummaryPayload(
+                contentsArray = contentsArray,
+                responseSchema = responseSchema,
+                apiThinkingLevel = apiThinkingLevel,
+                serviceTier = GeminiServiceTier.FLEX
+            )
+            val request = Request.Builder()
+                .url("$BASE_URL/v1beta/models/$primaryModel:generateContent?key=$apiKey")
+                .post(flexPayload.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            try {
+                flexClient.executeCancellable(request).use { response ->
+                    val raw = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        logUsageMetadata(
+                            model = primaryModel,
+                            thinkingLevel = apiThinkingLevel,
+                            tier = "flex",
+                            mode = if (includeTranscript) "summary+transcript" else "summary-only",
+                            rawBody = raw
+                        )
+                        return GeminiResponseParser.parseSummaryResponse(raw)
+                    }
+                    val errMsg = extractApiError(raw)
+                    val isFlexOverload = response.code == 503 || response.code == 429 || response.code == 500
+                    if (isFlexOverload) {
+                        throw FlexOverloadedException("Gemini Flex ($primaryModel) 暫時滿載 (${response.code}): $errMsg")
+                    }
+                    val isFlexUnsupported = response.code == 400 && (
+                        errMsg.contains("serviceTier", ignoreCase = true) ||
+                            errMsg.contains("service_tier", ignoreCase = true) ||
+                            errMsg.contains("flex", ignoreCase = true)
+                        )
+                    if (isFlexUnsupported) {
+                        runCatching {
+                            Log.w(TAG, "Flex tier unsupported on $primaryModel ($errMsg); falling back to Standard")
+                        }
+                    } else {
+                        throw IOException("Gemini ($primaryModel) 錯誤 (${response.code}): $errMsg")
+                    }
+                }
+            } catch (ste: SocketTimeoutException) {
+                throw FlexOverloadedException("Gemini Flex ($primaryModel) 排隊逾時，將自動重試", ste)
+            }
+        }
+
+        val candidateModels = listOf(
+            primaryModel,
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite"
+        ).distinct()
+
         var lastError: IOException? = null
         for ((modelIdx, targetModel) in candidateModels.withIndex()) {
             val apiThinkingLevel = thinkingLevel.resolveApiThinkingLevel(targetModel)
-            val payloadString = buildJsonObject {
-                put("contents", contentsArray)
-                put("generationConfig", buildJsonObject {
-                    put("responseMimeType", "application/json")
-                    put("responseSchema", responseSchema)
-                    if (apiThinkingLevel != null) {
-                        put("thinkingConfig", buildJsonObject {
-                            put("thinkingLevel", apiThinkingLevel)
-                        })
-                    }
-                })
-            }.toString()
+            val payloadString = buildSummaryPayload(
+                contentsArray = contentsArray,
+                responseSchema = responseSchema,
+                apiThinkingLevel = apiThinkingLevel,
+                serviceTier = GeminiServiceTier.STANDARD
+            )
 
             val attemptsForModel = if (modelIdx == 0) 2 else 1
             repeat(attemptsForModel) { attempt ->
@@ -312,12 +425,13 @@ class GeminiService(
                     .post(payloadString.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                client.executeCancellable(request).use { response ->
                     val raw = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
                         logUsageMetadata(
                             model = targetModel,
                             thinkingLevel = apiThinkingLevel,
+                            tier = "standard",
                             mode = if (includeTranscript) "summary+transcript" else "summary-only",
                             rawBody = raw
                         )
@@ -350,15 +464,10 @@ class GeminiService(
         prompt: String,
         model: String,
         thinkingLevel: GeminiThinkingLevel,
+        tryQuickFlexFirst: Boolean,
         apiKey: String
     ): String {
         val primaryModel = model.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
-        val candidateModels = listOf(
-            primaryModel,
-            "gemini-3.8-flash",
-            "gemini-3.5-flash-lite"
-        ).distinct()
-
         val contentsArray = buildAudioContents(
             fileUri = fileUri,
             mimeType = mimeType,
@@ -366,19 +475,53 @@ class GeminiService(
             prompt = prompt
         )
 
+        if (tryQuickFlexFirst) {
+            val apiThinkingLevel = thinkingLevel.resolveApiThinkingLevel(primaryModel)
+            val flexPayload = buildPlainTextPayload(
+                contentsArray = contentsArray,
+                apiThinkingLevel = apiThinkingLevel,
+                serviceTier = GeminiServiceTier.FLEX
+            )
+            val request = Request.Builder()
+                .url("$BASE_URL/v1beta/models/$primaryModel:generateContent?key=$apiKey")
+                .post(flexPayload.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            val flexResult = runCatching {
+                quickFlexClient.executeCancellable(request).use { response ->
+                    val raw = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        logUsageMetadata(
+                            model = primaryModel,
+                            thinkingLevel = apiThinkingLevel,
+                            tier = "flex",
+                            mode = "transcript-only",
+                            rawBody = raw
+                        )
+                        GeminiResponseParser.stripCodeFence(GeminiResponseParser.extractCandidateText(raw))
+                    } else {
+                        null
+                    }
+                }
+            }.getOrNull()
+            if (!flexResult.isNullOrBlank()) {
+                return flexResult
+            }
+        }
+
+        val candidateModels = listOf(
+            primaryModel,
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite"
+        ).distinct()
+
         var lastError: IOException? = null
         for ((modelIdx, targetModel) in candidateModels.withIndex()) {
             val apiThinkingLevel = thinkingLevel.resolveApiThinkingLevel(targetModel)
-            val payloadString = buildJsonObject {
-                put("contents", contentsArray)
-                if (apiThinkingLevel != null) {
-                    put("generationConfig", buildJsonObject {
-                        put("thinkingConfig", buildJsonObject {
-                            put("thinkingLevel", apiThinkingLevel)
-                        })
-                    })
-                }
-            }.toString()
+            val payloadString = buildPlainTextPayload(
+                contentsArray = contentsArray,
+                apiThinkingLevel = apiThinkingLevel,
+                serviceTier = GeminiServiceTier.STANDARD
+            )
 
             val attemptsForModel = if (modelIdx == 0) 2 else 1
             repeat(attemptsForModel) { attempt ->
@@ -387,12 +530,13 @@ class GeminiService(
                     .post(payloadString.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                client.executeCancellable(request).use { response ->
                     val raw = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
                         logUsageMetadata(
                             model = targetModel,
                             thinkingLevel = apiThinkingLevel,
+                            tier = "standard",
                             mode = "transcript-only",
                             rawBody = raw
                         )
@@ -417,6 +561,62 @@ class GeminiService(
         }
         throw lastError ?: IOException("Gemini 逐字稿產生失敗，請稍後重試。")
     }
+
+    private fun buildSummaryPayload(
+        contentsArray: JsonArray,
+        responseSchema: JsonObject,
+        apiThinkingLevel: String?,
+        serviceTier: GeminiServiceTier
+    ): String = buildJsonObject {
+        put("contents", contentsArray)
+        put("generationConfig", buildJsonObject {
+            put("responseMimeType", "application/json")
+            put("responseSchema", responseSchema)
+            if (apiThinkingLevel != null) {
+                put("thinkingConfig", buildJsonObject {
+                    put("thinkingLevel", apiThinkingLevel)
+                })
+            }
+        })
+        serviceTier.apiValue?.let { put("serviceTier", it) }
+    }.toString()
+
+    private fun buildPlainTextPayload(
+        contentsArray: JsonArray,
+        apiThinkingLevel: String?,
+        serviceTier: GeminiServiceTier
+    ): String = buildJsonObject {
+        put("contents", contentsArray)
+        if (apiThinkingLevel != null) {
+            put("generationConfig", buildJsonObject {
+                put("thinkingConfig", buildJsonObject {
+                    put("thinkingLevel", apiThinkingLevel)
+                })
+            })
+        }
+        serviceTier.apiValue?.let { put("serviceTier", it) }
+    }.toString()
+
+    private suspend fun OkHttpClient.executeCancellable(request: Request): Response =
+        suspendCancellableCoroutine { cont ->
+            val call = newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) {
+                        cont.resumeWithException(e)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (cont.isActive) {
+                        cont.resume(response)
+                    } else {
+                        response.close()
+                    }
+                }
+            })
+        }
 
     private fun buildAudioContents(
         fileUri: String,
@@ -459,7 +659,8 @@ class GeminiService(
         model: String,
         thinkingLevel: String?,
         mode: String,
-        rawBody: String
+        rawBody: String,
+        tier: String = "standard"
     ) {
         runCatching {
             val usage = json.parseToJsonElement(rawBody).jsonObject["usageMetadata"]?.jsonObject ?: return
@@ -469,7 +670,7 @@ class GeminiService(
             val totalTokens = usage["totalTokenCount"]?.jsonPrimitive?.contentOrNull ?: "?"
             Log.i(
                 TAG,
-                "Gemini usage [$mode] model=$model thinking=${thinkingLevel ?: "default"} " +
+                "Gemini usage [$mode/$tier] model=$model thinking=${thinkingLevel ?: "default"} " +
                     "prompt=$promptTokens candidates=$candidateTokens thoughts=$thoughtTokens total=$totalTokens"
             )
         }

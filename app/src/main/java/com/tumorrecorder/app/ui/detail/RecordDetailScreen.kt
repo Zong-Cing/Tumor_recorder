@@ -73,15 +73,20 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material3.ButtonDefaults
 import com.tumorrecorder.app.data.local.CallRecordEntity
 import com.tumorrecorder.app.data.remote.EmailFormatter
 import com.tumorrecorder.app.domain.model.AppSettings
+import com.tumorrecorder.app.domain.model.ProcessingStatus
 import com.tumorrecorder.app.ui.components.StatusBadge
 import com.tumorrecorder.app.ui.components.UrgencyBadge
 import com.tumorrecorder.app.ui.theme.MedicalTeal
 import com.tumorrecorder.app.ui.theme.SuccessGreen
 import com.tumorrecorder.app.ui.theme.UrgentRed
 import com.tumorrecorder.app.ui.theme.UrgentRedContainer
+import com.tumorrecorder.app.ui.theme.WarningAmber
+import com.tumorrecorder.app.ui.theme.WarningAmberContainer
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -222,7 +227,40 @@ fun RecordDetailScreen(
                 }
             }
 
-            if (!current.errorMessage.isNullOrBlank()) {
+            if (current.processingStatus == ProcessingStatus.WAITING_FLEX) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = WarningAmberContainer),
+                    border = BorderStroke(1.dp, WarningAmber.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Flex 半價層自動排隊中（省 50% 費用）",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF78350F)
+                        )
+                        Text(
+                            text = current.errorMessage?.takeIf { it.isNotBlank() }
+                                ?: "正在等待 Flex 半價算力；系統會以指數退避背景自動重試，滿 30 分鐘自動改標準層完成。",
+                            color = Color(0xFF78350F),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Button(
+                            onClick = { viewModel.runStandardNow() },
+                            colors = ButtonDefaults.buttonColors(containerColor = WarningAmber),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("不等了，改用標準層立即分析")
+                        }
+                    }
+                }
+            } else if (!current.errorMessage.isNullOrBlank()) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = UrgentRedContainer)
@@ -612,6 +650,7 @@ fun RecordDetailScreen(
         var includeTranscript by remember(settings.generateTranscriptByDefault) {
             mutableStateOf(settings.generateTranscriptByDefault)
         }
+        var forceStandardTier by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showReanalyzePicker = false },
             title = { Text("選擇要重新分析的 Prompt") },
@@ -643,6 +682,24 @@ fun RecordDetailScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                    if (settings.useFlexTier) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { forceStandardTier = !forceStandardTier }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = forceStandardTier,
+                                onCheckedChange = { forceStandardTier = it }
+                            )
+                            Text(
+                                text = "急件：直接用標準層（不等 Flex 半價）",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -651,11 +708,12 @@ fun RecordDetailScreen(
                         showReanalyzePicker = false
                         viewModel.reAnalyze(
                             promptTemplateId = selectedPromptId ?: -1L,
-                            includeTranscript = includeTranscript
+                            includeTranscript = includeTranscript,
+                            forceStandardTier = forceStandardTier
                         )
                     }
                 ) {
-                    Text("開始重新分析")
+                    Text(if (settings.useFlexTier && !forceStandardTier) "Flex 半價重新分析" else "開始重新分析")
                 }
             },
             dismissButton = {

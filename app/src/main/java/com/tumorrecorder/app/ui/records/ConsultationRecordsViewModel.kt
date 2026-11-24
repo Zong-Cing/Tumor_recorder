@@ -52,14 +52,25 @@ class ConsultationRecordsViewModel(
     fun analyzeWithPrompt(
         recordId: Long,
         promptTemplateId: Long,
-        includeTranscript: Boolean? = null
+        includeTranscript: Boolean? = null,
+        forceStandardTier: Boolean = false
     ) {
         container.callRecordRepository.enqueueProcessing(
             recordId = recordId,
             promptTemplateId = promptTemplateId,
-            includeTranscript = includeTranscript
+            includeTranscript = includeTranscript,
+            forceStandardTier = forceStandardTier
         )
-        _snackbarMessage.value = "已使用選定 Prompt 加入 AI 摘要分析佇列"
+        _snackbarMessage.value = if (forceStandardTier) {
+            "已使用標準層立即開始 AI 摘要分析"
+        } else {
+            "已使用選定 Prompt 加入 AI 摘要分析佇列"
+        }
+    }
+
+    fun runStandardNow(recordId: Long) {
+        container.callRecordRepository.switchToStandardNow(recordId = recordId)
+        _snackbarMessage.value = "已取消 Flex 等待，改用標準層立即進行 AI 分析"
     }
 
     fun clearSnackbar() {

@@ -60,6 +60,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material3.ButtonDefaults
 import com.tumorrecorder.app.data.local.CallRecordEntity
 import com.tumorrecorder.app.data.remote.EmailFormatter
 import com.tumorrecorder.app.domain.model.ProcessingStatus
@@ -69,6 +71,8 @@ import com.tumorrecorder.app.ui.components.UrgencyBadge
 import com.tumorrecorder.app.ui.theme.MedicalTeal
 import com.tumorrecorder.app.ui.theme.SuccessGreen
 import com.tumorrecorder.app.ui.theme.UrgentRed
+import com.tumorrecorder.app.ui.theme.WarningAmber
+import com.tumorrecorder.app.ui.theme.WarningAmberContainer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -185,7 +189,8 @@ fun ConsultationRecordsScreen(
                     ConsultationRecordCard(
                         record = record,
                         onClick = { onOpenRecord(record.id) },
-                        onAnalyzeOrRetry = { manualAnalyzeRecordId = record.id }
+                        onAnalyzeOrRetry = { manualAnalyzeRecordId = record.id },
+                        onRunStandardNow = { viewModel.runStandardNow(record.id) }
                     )
                 }
             }
@@ -202,6 +207,7 @@ fun ConsultationRecordsScreen(
         var includeTranscript by remember(targetManualId, settings.generateTranscriptByDefault) {
             mutableStateOf(settings.generateTranscriptByDefault)
         }
+        var forceStandardTier by remember(targetManualId) { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { manualAnalyzeRecordId = null },
             title = { Text("選擇要使用的分析 Prompt") },
@@ -233,6 +239,24 @@ fun ConsultationRecordsScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                    if (settings.useFlexTier) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { forceStandardTier = !forceStandardTier }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = forceStandardTier,
+                                onCheckedChange = { forceStandardTier = it }
+                            )
+                            Text(
+                                text = "急件：直接用標準層（不等 Flex 半價）",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -241,12 +265,13 @@ fun ConsultationRecordsScreen(
                         viewModel.analyzeWithPrompt(
                             recordId = targetManualId,
                             promptTemplateId = selectedPromptId ?: -1L,
-                            includeTranscript = includeTranscript
+                            includeTranscript = includeTranscript,
+                            forceStandardTier = forceStandardTier
                         )
                         manualAnalyzeRecordId = null
                     }
                 ) {
-                    Text("開始 AI 分析")
+                    Text(if (settings.useFlexTier && !forceStandardTier) "Flex 半價分析" else "開始 AI 分析")
                 }
             },
             dismissButton = {
@@ -262,7 +287,8 @@ fun ConsultationRecordsScreen(
 private fun ConsultationRecordCard(
     record: CallRecordEntity,
     onClick: () -> Unit,
-    onAnalyzeOrRetry: () -> Unit
+    onAnalyzeOrRetry: () -> Unit,
+    onRunStandardNow: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -331,7 +357,15 @@ private fun ConsultationRecordCard(
                 }
             }
 
-            if (record.summary.isNotBlank()) {
+            if (record.processingStatus == ProcessingStatus.WAITING_FLEX && !record.errorMessage.isNullOrBlank()) {
+                Text(
+                    text = record.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = WarningAmber,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else if (record.summary.isNotBlank()) {
                 Text(
                     text = record.summary,
                     style = MaterialTheme.typography.bodyMedium,
@@ -374,7 +408,18 @@ private fun ConsultationRecordCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (record.emailSent) {
+                    if (record.processingStatus == ProcessingStatus.WAITING_FLEX) {
+                        Button(
+                            onClick = onRunStandardNow,
+                            colors = ButtonDefaults.buttonColors(containerColor = WarningAmber),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("改用標準層", style = MaterialTheme.typography.labelMedium)
+                        }
+                    } else if (record.emailSent) {
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "已寄信",

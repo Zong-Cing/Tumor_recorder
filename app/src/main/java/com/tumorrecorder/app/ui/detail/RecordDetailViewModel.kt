@@ -93,18 +93,28 @@ class RecordDetailViewModel(
         }
     }
 
-    fun reAnalyze(promptTemplateId: Long = -1L, includeTranscript: Boolean? = null) {
+    fun reAnalyze(
+        promptTemplateId: Long = -1L,
+        includeTranscript: Boolean? = null,
+        forceStandardTier: Boolean = false
+    ) {
         container.callRecordRepository.enqueueProcessing(
             recordId = recordId,
             promptTemplateId = promptTemplateId,
             forceSendEmail = false,
-            includeTranscript = includeTranscript
+            includeTranscript = includeTranscript,
+            forceStandardTier = forceStandardTier
         )
-        _message.value = if (includeTranscript == true) {
-            "已排程重新進行 AI 摘要與完整逐字稿分析"
-        } else {
-            "已使用選定 Prompt 排程重新進行 AI 精簡摘要分析"
+        _message.value = when {
+            forceStandardTier -> "已改用標準層立即排程重新進行 AI 分析"
+            includeTranscript == true -> "已排程重新進行 AI 摘要與完整逐字稿分析"
+            else -> "已使用選定 Prompt 排程重新進行 AI 精簡摘要分析"
         }
+    }
+
+    fun runStandardNow() {
+        container.callRecordRepository.switchToStandardNow(recordId = recordId)
+        _message.value = "已取消 Flex 等待，改用標準層立即進行 AI 分析"
     }
 
     fun generateTranscriptOnly() {

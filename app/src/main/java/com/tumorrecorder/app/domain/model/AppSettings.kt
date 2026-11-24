@@ -93,6 +93,7 @@ data class AppSettings(
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
     val geminiThinkingLevel: GeminiThinkingLevel = GeminiThinkingLevel.AUTO_LOWEST,
     val generateTranscriptByDefault: Boolean = false,
+    val useFlexTier: Boolean = true,
     val customPromptAppendix: String = "",
     val smtpHost: String = DEFAULT_SMTP_HOST,
     val smtpPort: Int = DEFAULT_SMTP_PORT,

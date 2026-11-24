@@ -161,15 +161,21 @@ class HomeViewModel(
     fun confirmAnalyzeNow(
         recordId: Long,
         promptTemplateId: Long,
-        includeTranscript: Boolean? = null
+        includeTranscript: Boolean? = null,
+        forceStandardTier: Boolean = false
     ) {
         CallRecordingService.clearPendingConfirm()
         container.callRecordRepository.enqueueProcessing(
             recordId = recordId,
             promptTemplateId = promptTemplateId,
-            includeTranscript = includeTranscript
+            includeTranscript = includeTranscript,
+            forceStandardTier = forceStandardTier
         )
-        _snackbarMessage.value = "已開始 Gemini AI 摘要分析，完成後將依設定自動寄信"
+        _snackbarMessage.value = if (forceStandardTier) {
+            "已改用標準層立即開始 Gemini AI 分析，完成後將依設定自動寄信"
+        } else {
+            "已開始 Gemini AI 摘要分析，完成後將依設定自動寄信"
+        }
     }
 
     fun dismissConfirmKeepRecord() {

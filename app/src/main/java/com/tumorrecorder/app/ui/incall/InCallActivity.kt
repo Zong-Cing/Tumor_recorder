@@ -147,11 +147,12 @@ class InCallActivity : ComponentActivity() {
                 if (confirmId != null && (callState == null || callState?.state == Call.STATE_DISCONNECTED)) {
                     PostCallAnalysisPromptScreen(
                         recordId = confirmId,
-                        onAnalyzeNow = { selectedPromptId, includeTranscript ->
+                        onAnalyzeNow = { selectedPromptId, includeTranscript, forceStandardTier ->
                             container.callRecordRepository.enqueueProcessing(
                                 recordId = confirmId,
                                 promptTemplateId = selectedPromptId,
-                                includeTranscript = includeTranscript
+                                includeTranscript = includeTranscript,
+                                forceStandardTier = forceStandardTier
                             )
                             CallRecordingService.clearPendingConfirm()
                             openHomeAndFinish(openRecordId = confirmId)
@@ -696,7 +697,7 @@ private fun DtmfKeypad(entered: String, onDigit: (Char) -> Unit) {
 @Composable
 private fun PostCallAnalysisPromptScreen(
     recordId: Long,
-    onAnalyzeNow: (Long, Boolean) -> Unit,
+    onAnalyzeNow: (Long, Boolean, Boolean) -> Unit,
     onKeepForLater: () -> Unit,
     onDiscardRecording: () -> Unit
 ) {
@@ -715,6 +716,7 @@ private fun PostCallAnalysisPromptScreen(
     var includeTranscript by remember(recordId, settings.generateTranscriptByDefault) {
         mutableStateOf(settings.generateTranscriptByDefault)
     }
+    var forceStandardTier by remember(recordId) { mutableStateOf(false) }
     var isRecordingMemo by remember { mutableStateOf(false) }
 
     LaunchedEffect(templates) {
@@ -813,10 +815,36 @@ private fun PostCallAnalysisPromptScreen(
                     }
                 }
 
+                if (settings.useFlexTier) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { forceStandardTier = !forceStandardTier }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = forceStandardTier,
+                            onCheckedChange = { forceStandardTier = it }
+                        )
+                        Column {
+                            Text(
+                                text = "急件：直接用標準層立即分析",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "不勾選則預設走 Flex 半價層（滿載時自動重試，最長 30 分鐘後自動切標準層）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(4.dp))
 
                 Button(
-                    onClick = { onAnalyzeNow(selectedPromptId ?: -1L, includeTranscript) },
+                    onClick = { onAnalyzeNow(selectedPromptId ?: -1L, includeTranscript, forceStandardTier) },
                     enabled = !isRecordingMemo,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = MedicalTeal)
@@ -825,9 +853,9 @@ private fun PostCallAnalysisPromptScreen(
                         if (isRecordingMemo) {
                             "請先停止口述補充錄音再開始分析"
                         } else if (info?.hasSupplementAudio == true) {
-                            "合併口述補充並開始 AI 分析"
+                            if (settings.useFlexTier && !forceStandardTier) "合併口述補充並以 Flex 半價分析" else "合併口述補充並開始 AI 分析"
                         } else {
-                            "使用此 Prompt 開始分析並寄信"
+                            if (settings.useFlexTier && !forceStandardTier) "以 Flex 半價開始分析並寄信" else "使用此 Prompt 開始分析並寄信"
                         }
                     )
                 }

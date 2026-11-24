@@ -119,7 +119,12 @@ class CallRecordRepository(
         recordId: Long,
         promptTemplateId: Long = -1L,
         forceSendEmail: Boolean = false,
-        includeTranscript: Boolean? = null
+        includeTranscript: Boolean? = null,
+        forceStandardTier: Boolean = false,
+        flexAttempt: Int = 0,
+        flexStartedAtMillis: Long = 0L,
+        initialDelayMillis: Long = 0L,
+        appendInsteadOfReplace: Boolean = false
     ) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -129,20 +134,52 @@ class CallRecordRepository(
             add(CallProcessingWorker.KEY_RECORD_ID to recordId)
             add(CallProcessingWorker.KEY_PROMPT_TEMPLATE_ID to promptTemplateId)
             add(CallProcessingWorker.KEY_FORCE_EMAIL to forceSendEmail)
+            add(CallProcessingWorker.KEY_FORCE_STANDARD to forceStandardTier)
+            add(CallProcessingWorker.KEY_FLEX_ATTEMPT to flexAttempt)
+            if (flexStartedAtMillis > 0L) {
+                add(CallProcessingWorker.KEY_FLEX_STARTED_AT_MILLIS to flexStartedAtMillis)
+            }
             if (includeTranscript != null) {
                 add(CallProcessingWorker.KEY_INCLUDE_TRANSCRIPT to includeTranscript)
             }
         }.toTypedArray()
 
-        val request = OneTimeWorkRequestBuilder<CallProcessingWorker>()
+        val builder = OneTimeWorkRequestBuilder<CallProcessingWorker>()
             .setConstraints(constraints)
             .setInputData(workDataOf(*pairs))
-            .build()
+
+        if (initialDelayMillis > 0L) {
+            builder.setInitialDelay(initialDelayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+
+        val policy = if (appendInsteadOfReplace) {
+            ExistingWorkPolicy.APPEND_OR_REPLACE
+        } else {
+            ExistingWorkPolicy.REPLACE
+        }
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             "process_call_$recordId",
-            ExistingWorkPolicy.REPLACE,
-            request
+            policy,
+            builder.build()
+        )
+    }
+
+    /**
+     * Immediately cancels any pending/in-flight Flex backoff job for [recordId]
+     * and launches Standard-tier analysis right away.
+     */
+    fun switchToStandardNow(
+        recordId: Long,
+        promptTemplateId: Long = -1L,
+        includeTranscript: Boolean? = null
+    ) {
+        enqueueProcessing(
+            recordId = recordId,
+            promptTemplateId = promptTemplateId,
+            forceSendEmail = false,
+            includeTranscript = includeTranscript,
+            forceStandardTier = true
         )
     }
 

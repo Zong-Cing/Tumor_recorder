@@ -354,6 +354,15 @@ fun SettingsScreen(
                     }
                 )
 
+                SettingToggleRow(
+                    title = "優先使用 Flex 半價層（省 50% 費用）",
+                    subtitle = "輸入與輸出皆半價；遇 503 滿載會於背景指數退避自動重試，最長 30 分鐘後自動切標準層，期間隨時可點按鈕立即改標準層",
+                    checked = settings.useFlexTier,
+                    onCheckedChange = { enabled ->
+                        viewModel.update { it.copy(useFlexTier = enabled) }
+                    }
+                )
+
                 Button(
                     onClick = { viewModel.testGeminiConnection() },
                     enabled = !testingGemini && settings.geminiApiKey.isNotBlank(),

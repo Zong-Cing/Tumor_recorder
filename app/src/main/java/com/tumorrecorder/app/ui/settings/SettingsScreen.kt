@@ -299,6 +299,7 @@ fun SettingsScreen(
                     listOf(
                         "gemini-4-hydrogen",
                         "gemini-3.8-flash",
+                        "gemini-3.6-flash",
                         "gemini-3.5-flash-lite",
                         "gemini-4-carbon",
                         "gemini-4-neon"
@@ -311,7 +312,7 @@ fun SettingsScreen(
                     }
                 }
                 Text(
-                    text = "若免費層遇到 503 滿載，系統分析時會自動重試並依序降級至 gemini-3.8-flash → gemini-3.5-flash-lite。",
+                    text = "預設使用 gemini-4-hydrogen；若遇 503 滿載會自動重試並依序降級至 gemini-3.8-flash → gemini-3.5-flash-lite。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -322,6 +323,35 @@ fun SettingsScreen(
                     label = { Text("自訂 Gemini 模型 ID") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
+                )
+
+                Text("思考等級（Thinking Level，控制推理費用）", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    com.tumorrecorder.app.domain.model.GeminiThinkingLevel.entries.forEach { level ->
+                        FilterChip(
+                            selected = settings.geminiThinkingLevel == level,
+                            onClick = { viewModel.update { it.copy(geminiThinkingLevel = level) } },
+                            label = { Text(level.label) }
+                        )
+                    }
+                }
+                val resolvedThinking = settings.geminiThinkingLevel.resolveApiThinkingLevel(settings.geminiModel)
+                Text(
+                    text = "${settings.geminiThinkingLevel.description}（目前對 ${settings.geminiModel} 實際套用：${resolvedThinking ?: "模型預設"}）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MedicalTeal
+                )
+
+                SettingToggleRow(
+                    title = "預設分析時同時產生完整逐字稿",
+                    subtitle = "預設關閉可省約一半輸出費用；關閉時僅產出結構化摘要與待辦，仍可於紀錄詳情頁隨時單獨補產逐字稿",
+                    checked = settings.generateTranscriptByDefault,
+                    onCheckedChange = { enabled ->
+                        viewModel.update { it.copy(generateTranscriptByDefault = enabled) }
+                    }
                 )
 
                 Button(
@@ -441,7 +471,7 @@ fun SettingsScreen(
 
                 SettingToggleRow(
                     title = "寄信成功後自動刪除本機錄音檔",
-                    subtitle = "強化病患隱私保護：僅保留摘要與逐字稿文字，自動清除手機音檔",
+                    subtitle = "強化病患隱私保護：自動清除手機音檔（注意：刪除後將無法再補產逐字稿或重分析）",
                     checked = settings.deleteAudioAfterEmailSent,
                     onCheckedChange = { enabled ->
                         viewModel.update { it.copy(deleteAudioAfterEmailSent = enabled) }

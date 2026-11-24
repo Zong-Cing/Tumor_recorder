@@ -37,6 +37,9 @@ class RecordDetailViewModel(
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
+    private val _isGeneratingTranscript = MutableStateFlow(false)
+    val isGeneratingTranscript: StateFlow<Boolean> = _isGeneratingTranscript.asStateFlow()
+
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
@@ -90,13 +93,57 @@ class RecordDetailViewModel(
         }
     }
 
-    fun reAnalyze(promptTemplateId: Long = -1L) {
+    fun reAnalyze(promptTemplateId: Long = -1L, includeTranscript: Boolean? = null) {
         container.callRecordRepository.enqueueProcessing(
             recordId = recordId,
             promptTemplateId = promptTemplateId,
-            forceSendEmail = false
+            forceSendEmail = false,
+            includeTranscript = includeTranscript
         )
-        _message.value = "已使用選定 Prompt 排程重新進行 AI 轉錄與摘要"
+        _message.value = if (includeTranscript == true) {
+            "已排程重新進行 AI 摘要與完整逐字稿分析"
+        } else {
+            "已使用選定 Prompt 排程重新進行 AI 精簡摘要分析"
+        }
+    }
+
+    fun generateTranscriptOnly() {
+        val current = record.value ?: return
+        if (_isGeneratingTranscript.value) return
+
+        val validAudio = current.audioFilePath.takeIf { it.isNotBlank() }?.let { java.io.File(it) }
+        if (validAudio == null || !validAudio.exists() || validAudio.length() == 0L) {
+            _message.value = "找不到本機錄音檔，無法補產逐字稿"
+            return
+        }
+        val supplementFile = current.supplementAudioFilePath
+            .takeIf { it.isNotBlank() }
+            ?.let { java.io.File(it) }
+            ?.takeIf { it.exists() && it.length() > 0L }
+
+        viewModelScope.launch {
+            _isGeneratingTranscript.value = true
+            runCatching {
+                val settings = container.settingsRepository.currentSettings()
+                val callTimeDisplay = com.tumorrecorder.app.data.remote.EmailFormatter.formatTimestamp(current.startedAtMillis)
+                val mime = current.audioMimeType.ifBlank { "audio/mp4" }
+                container.geminiService.transcribeOnly(
+                    audioFile = validAudio,
+                    mimeType = mime,
+                    phoneNumber = current.phoneNumber,
+                    callTimeDisplay = callTimeDisplay,
+                    settings = settings,
+                    supplementAudioFile = supplementFile
+                )
+            }.onSuccess { transcript ->
+                val latest = container.callRecordRepository.getRecord(recordId) ?: current
+                container.callRecordRepository.updateRecord(latest.copy(transcript = transcript))
+                _message.value = "已完成完整逐字稿（原有摘要與編輯內容已保留）"
+            }.onFailure { e ->
+                _message.value = "產生逐字稿失敗：${e.message ?: "請檢查網路或 API Key"}"
+            }
+            _isGeneratingTranscript.value = false
+        }
     }
 
     fun resendEmail() {
@@ -105,7 +152,7 @@ class RecordDetailViewModel(
             runCatching {
                 container.callRecordRepository.resendEmailOnly(recordId)
             }.onSuccess {
-                _message.value = "已成功寄出摘要與逐字稿信件"
+                _message.value = "已成功寄出通話紀錄信件"
             }.onFailure { e ->
                 _message.value = "寄信失敗：${e.message ?: "請檢查設定"}"
             }

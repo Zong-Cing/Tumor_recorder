@@ -57,4 +57,15 @@ class EmailFormatterTest {
         assertTrue(body.contains("【通話討論摘要】"))
         assertTrue(body.contains("【完整通話逐字稿】"))
     }
+
+    @Test
+    fun buildBodies_handleEmptyTranscriptGracefullyInCompactMode() {
+        val compactRecord = sampleRecord.copy(transcript = "")
+        val plain = EmailFormatter.buildPlainTextBody(compactRecord, AppSettings())
+        val html = EmailFormatter.buildHtmlBody(compactRecord, AppSettings())
+
+        assertTrue(plain.contains("精簡摘要模式"))
+        assertTrue(html.contains("精簡摘要模式"))
+        assertTrue(html.contains("腫瘤個案管理通話摘要</h2>"))
+    }
 }

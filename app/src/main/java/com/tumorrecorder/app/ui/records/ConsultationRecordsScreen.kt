@@ -32,6 +32,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -198,6 +199,9 @@ fun ConsultationRecordsScreen(
                 (promptTemplates.firstOrNull { it.isDefault } ?: promptTemplates.firstOrNull())?.id
             )
         }
+        var includeTranscript by remember(targetManualId, settings.generateTranscriptByDefault) {
+            mutableStateOf(settings.generateTranscriptByDefault)
+        }
         AlertDialog(
             onDismissRequest = { manualAnalyzeRecordId = null },
             title = { Text("選擇要使用的分析 Prompt") },
@@ -213,12 +217,32 @@ fun ConsultationRecordsScreen(
                         selectedTemplateId = selectedPromptId,
                         onSelect = { selectedPromptId = it }
                     )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { includeTranscript = !includeTranscript }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = includeTranscript,
+                            onCheckedChange = { includeTranscript = it }
+                        )
+                        Text(
+                            text = "同時產生完整逐字稿（選填）",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.analyzeWithPrompt(targetManualId, selectedPromptId ?: -1L)
+                        viewModel.analyzeWithPrompt(
+                            recordId = targetManualId,
+                            promptTemplateId = selectedPromptId ?: -1L,
+                            includeTranscript = includeTranscript
+                        )
                         manualAnalyzeRecordId = null
                     }
                 ) {

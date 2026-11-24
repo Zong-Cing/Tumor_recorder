@@ -49,10 +49,15 @@ class ConsultationRecordsViewModel(
         _searchQuery.value = value
     }
 
-    fun analyzeWithPrompt(recordId: Long, promptTemplateId: Long) {
+    fun analyzeWithPrompt(
+        recordId: Long,
+        promptTemplateId: Long,
+        includeTranscript: Boolean? = null
+    ) {
         container.callRecordRepository.enqueueProcessing(
             recordId = recordId,
-            promptTemplateId = promptTemplateId
+            promptTemplateId = promptTemplateId,
+            includeTranscript = includeTranscript
         )
         _snackbarMessage.value = "已使用選定 Prompt 加入 AI 摘要分析佇列"
     }

@@ -34,7 +34,11 @@ class SettingsViewModel(
         viewModelScope.launch {
             _testingGemini.value = true
             runCatching {
-                container.geminiService.testConnection(s.geminiApiKey, s.geminiModel)
+                container.geminiService.testConnection(
+                    apiKey = s.geminiApiKey,
+                    model = s.geminiModel,
+                    thinkingLevel = s.geminiThinkingLevel
+                )
             }.onSuccess { reply ->
                 _feedbackMessage.value = "Gemini API 測試成功：$reply"
             }.onFailure { e ->

@@ -183,6 +183,9 @@ class EmailService {
  */
 object EmailFormatter {
 
+    internal const val NO_TRANSCRIPT_PLACEHOLDER =
+        "（本次為精簡摘要模式，未產出完整逐字稿；如需逐字稿可於 App 紀錄詳情頁隨時點擊補產）"
+
     fun buildSubject(record: CallRecordEntity): String {
         val urgencyPrefix = if (record.urgencyLevel == "緊急") "【緊急】" else ""
         val patient = record.patientName.ifBlank { "未識別病人" }
@@ -227,7 +230,7 @@ object EmailFormatter {
             appendLine(actionSection)
             appendLine()
             appendLine("【完整通話逐字稿】")
-            appendLine(record.transcript.ifBlank { "（無逐字稿內容）" })
+            appendLine(record.transcript.ifBlank { NO_TRANSCRIPT_PLACEHOLDER })
             appendLine()
             appendLine("------------------------------------------")
             appendLine("※ 本紀錄由 AI 自動轉錄整理，請個管師核對病人姓名、病歷號與醫囑細節後再納入正式醫療紀錄。")
@@ -250,7 +253,8 @@ object EmailFormatter {
             }
         }
         val summaryHtml = escapeHtml(record.summary.ifBlank { "（無摘要內容）" }).replace("\n", "<br/>")
-        val transcriptHtml = escapeHtml(record.transcript.ifBlank { "（無逐字稿內容）" }).replace("\n", "<br/>")
+        val transcriptHtml = escapeHtml(record.transcript.ifBlank { NO_TRANSCRIPT_PLACEHOLDER }).replace("\n", "<br/>")
+        val headerTitle = if (record.transcript.isBlank()) "腫瘤個案管理通話摘要" else "腫瘤個案管理通話摘要與逐字稿"
 
         return """
 <!DOCTYPE html>
@@ -260,7 +264,7 @@ object EmailFormatter {
   <div style="max-width:680px;margin:0 auto;background:#FFFFFF;border-radius:12px;border:1px solid #E2E8F0;overflow:hidden;">
     <div style="background:#0F766E;color:#FFFFFF;padding:18px 24px;">
       <div style="font-size:13px;opacity:0.9;">${escapeHtml(settings.defaultCaseManagerUnit)}</div>
-      <h2 style="margin:4px 0 0 0;font-size:20px;">腫瘤個案管理通話摘要與逐字稿</h2>
+      <h2 style="margin:4px 0 0 0;font-size:20px;">$headerTitle</h2>
     </div>
 
     <div style="padding:20px 24px;">

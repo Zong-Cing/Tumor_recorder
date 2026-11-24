@@ -2,6 +2,7 @@ package com.tumorrecorder.app.ui.detail
 
 import android.media.MediaPlayer
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Pause
@@ -34,6 +36,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -92,6 +95,7 @@ fun RecordDetailScreen(
     val record by viewModel.record.collectAsStateWithLifecycle()
     val promptTemplates by viewModel.promptTemplates.collectAsStateWithLifecycle()
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
+    val isGeneratingTranscript by viewModel.isGeneratingTranscript.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val deleted by viewModel.deleted.collectAsStateWithLifecycle()
 
@@ -442,6 +446,9 @@ fun RecordDetailScreen(
             }
 
             // Summary vs Transcript Tabs
+            val hasAudioFile = remember(current.audioFilePath) {
+                current.audioFilePath.isNotBlank() && File(current.audioFilePath).let { it.exists() && it.length() > 0L }
+            }
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -457,25 +464,29 @@ fun RecordDetailScreen(
                         Tab(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
-                            text = { Text("完整逐字稿") }
+                            text = {
+                                Text(
+                                    if (current.transcript.isBlank()) "完整逐字稿（可補產）" else "完整逐字稿"
+                                )
+                            }
                         )
                     }
 
-                    SelectionContainer {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            if (selectedTab == 0) {
+                    if (selectedTab == 0) {
+                        SelectionContainer {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
                                 Text(
                                     text = "討論重點摘要",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MedicalTeal
                                 )
                                 Text(
-                                    text = current.summary.ifBlank { "尚未產生摘要，請稍候或點擊「重新 AI 分析」。" },
+                                    text = current.summary.ifBlank { "尚未產生摘要，請稍候或點擊「更換 Prompt 重分析」。" },
                                     style = MaterialTheme.typography.bodyLarge
                                 )
 
@@ -501,16 +512,87 @@ fun RecordDetailScreen(
                                         )
                                     }
                                 }
-                            } else {
+                            }
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
                                     text = "完整通話逐字稿",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MedicalTeal
                                 )
+                                if (current.transcript.isNotBlank() && hasAudioFile) {
+                                    TextButton(
+                                        onClick = { viewModel.generateTranscriptOnly() },
+                                        enabled = !isGeneratingTranscript && !isBusy,
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        if (isGeneratingTranscript) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MedicalTeal
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("轉錄中...")
+                                        } else {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("重新產生")
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (current.transcript.isBlank()) {
                                 Text(
-                                    text = current.transcript.ifBlank { "尚未產生逐字稿。" },
-                                    style = MaterialTheme.typography.bodyMedium
+                                    text = "本次為精簡省費模式，尚未產生完整逐字稿。若需查核對話細節或歸檔逐字稿，可隨時點擊下方按鈕單獨補產（不會覆蓋目前摘要與手動修正欄位）。",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Button(
+                                    onClick = { viewModel.generateTranscriptOnly() },
+                                    enabled = !isGeneratingTranscript && !isBusy && hasAudioFile,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    if (isGeneratingTranscript) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                            color = Color.White
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Gemini 正在產生完整逐字稿...")
+                                    } else {
+                                        Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("產生完整逐字稿")
+                                    }
+                                }
+                                if (!hasAudioFile) {
+                                    Text(
+                                        text = "※ 本機原始錄音檔已移除，無法補產逐字稿。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = UrgentRed
+                                    )
+                                }
+                            } else {
+                                SelectionContainer {
+                                    Text(
+                                        text = current.transcript,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
                             }
                         }
                     }
@@ -527,6 +609,9 @@ fun RecordDetailScreen(
                 (promptTemplates.firstOrNull { it.isDefault } ?: promptTemplates.firstOrNull())?.id
             )
         }
+        var includeTranscript by remember(settings.generateTranscriptByDefault) {
+            mutableStateOf(settings.generateTranscriptByDefault)
+        }
         AlertDialog(
             onDismissRequest = { showReanalyzePicker = false },
             title = { Text("選擇要重新分析的 Prompt") },
@@ -542,13 +627,32 @@ fun RecordDetailScreen(
                         selectedTemplateId = selectedPromptId,
                         onSelect = { selectedPromptId = it }
                     )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { includeTranscript = !includeTranscript }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = includeTranscript,
+                            onCheckedChange = { includeTranscript = it }
+                        )
+                        Text(
+                            text = "同時產生完整逐字稿（選填）",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
                         showReanalyzePicker = false
-                        viewModel.reAnalyze(selectedPromptId ?: -1L)
+                        viewModel.reAnalyze(
+                            promptTemplateId = selectedPromptId ?: -1L,
+                            includeTranscript = includeTranscript
+                        )
                     }
                 ) {
                     Text("開始重新分析")

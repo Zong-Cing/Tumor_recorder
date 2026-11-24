@@ -1,8 +1,10 @@
 package com.tumorrecorder.app.data.remote
 
+import android.util.Log
 import com.tumorrecorder.app.data.local.PromptTemplateEntity
 import com.tumorrecorder.app.domain.PromptBuilder
 import com.tumorrecorder.app.domain.model.AppSettings
+import com.tumorrecorder.app.domain.model.GeminiThinkingLevel
 import com.tumorrecorder.app.domain.model.OncologySummaryResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -41,8 +43,8 @@ class GeminiService(
     }
 
     /**
-     * Uploads audio via Gemini Files API, requests structured transcription + summary,
-     * and deletes the temporary remote file in finally for medical privacy.
+     * Uploads audio via Gemini Files API, requests structured summary (with optional transcript),
+     * and deletes temporary remote files in finally for medical privacy.
      */
     suspend fun transcribeAndSummarize(
         audioFile: File,
@@ -51,7 +53,8 @@ class GeminiService(
         callTimeDisplay: String,
         settings: AppSettings,
         promptTemplate: PromptTemplateEntity? = null,
-        supplementAudioFile: File? = null
+        supplementAudioFile: File? = null,
+        includeTranscript: Boolean = settings.generateTranscriptByDefault
     ): OncologySummaryResult = withContext(Dispatchers.IO) {
         val apiKey = settings.geminiApiKey.trim()
         require(apiKey.isNotEmpty()) { "尚未設定 Gemini API Key，請先至「設定」頁面填入。" }
@@ -72,7 +75,8 @@ class GeminiService(
                 phoneNumber = phoneNumber,
                 callTimeDisplay = callTimeDisplay,
                 settings = settings,
-                hasSupplementAudio = uploadedSupplement != null
+                hasSupplementAudio = uploadedSupplement != null,
+                includeTranscript = includeTranscript
             )
             generateStructuredSummary(
                 fileUri = uploadedMain.uri,
@@ -80,6 +84,8 @@ class GeminiService(
                 supplementFileUri = uploadedSupplement?.uri,
                 prompt = prompt,
                 model = settings.geminiModel,
+                thinkingLevel = settings.geminiThinkingLevel,
+                includeTranscript = includeTranscript,
                 apiKey = apiKey
             )
         } finally {
@@ -90,10 +96,63 @@ class GeminiService(
         }
     }
 
-    suspend fun testConnection(apiKey: String, model: String): String = withContext(Dispatchers.IO) {
+    /**
+     * On-demand full verbatim transcription without overwriting existing structured summary.
+     */
+    suspend fun transcribeOnly(
+        audioFile: File,
+        mimeType: String,
+        phoneNumber: String?,
+        callTimeDisplay: String,
+        settings: AppSettings,
+        supplementAudioFile: File? = null
+    ): String = withContext(Dispatchers.IO) {
+        val apiKey = settings.geminiApiKey.trim()
+        require(apiKey.isNotEmpty()) { "尚未設定 Gemini API Key，請先至「設定」頁面填入。" }
+        require(audioFile.exists() && audioFile.length() > 0L) { "找不到有效的錄音檔案。" }
+
+        val validSupplement = supplementAudioFile?.takeIf { it.exists() && it.length() > 0L }
+        val uploadedMain = uploadAudioFile(audioFile, mimeType, apiKey)
+        var uploadedSupplement: UploadedGeminiFile? = null
+        try {
+            if (validSupplement != null) {
+                uploadedSupplement = uploadAudioFile(validSupplement, "audio/mp4", apiKey)
+            }
+            waitUntilFileActive(uploadedMain.name, apiKey)
+            uploadedSupplement?.let { waitUntilFileActive(it.name, apiKey) }
+
+            val prompt = PromptBuilder.buildTranscriptOnlyPrompt(
+                phoneNumber = phoneNumber,
+                callTimeDisplay = callTimeDisplay,
+                settings = settings,
+                hasSupplementAudio = uploadedSupplement != null
+            )
+            generatePlainTranscript(
+                fileUri = uploadedMain.uri,
+                mimeType = mimeType,
+                supplementFileUri = uploadedSupplement?.uri,
+                prompt = prompt,
+                model = settings.geminiModel,
+                thinkingLevel = settings.geminiThinkingLevel,
+                apiKey = apiKey
+            )
+        } finally {
+            runCatching { deleteUploadedFile(uploadedMain.name, apiKey) }
+            uploadedSupplement?.let { sup ->
+                runCatching { deleteUploadedFile(sup.name, apiKey) }
+            }
+        }
+    }
+
+    suspend fun testConnection(
+        apiKey: String,
+        model: String,
+        thinkingLevel: GeminiThinkingLevel = GeminiThinkingLevel.AUTO_LOWEST
+    ): String = withContext(Dispatchers.IO) {
         val trimmedKey = apiKey.trim()
         require(trimmedKey.isNotEmpty()) { "請先輸入 Gemini API Key" }
         val targetModel = model.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
+        val apiThinkingLevel = thinkingLevel.resolveApiThinkingLevel(targetModel)
 
         val bodyJson = buildJsonObject {
             put("contents", buildJsonArray {
@@ -105,6 +164,13 @@ class GeminiService(
                     })
                 })
             })
+            if (apiThinkingLevel != null) {
+                put("generationConfig", buildJsonObject {
+                    put("thinkingConfig", buildJsonObject {
+                        put("thinkingLevel", apiThinkingLevel)
+                    })
+                })
+            }
         }
 
         val request = Request.Builder()
@@ -117,8 +183,10 @@ class GeminiService(
             if (!response.isSuccessful) {
                 throw IOException("Gemini API 錯誤 (${response.code}): ${extractApiError(raw)}")
             }
+            logUsageMetadata(targetModel, apiThinkingLevel, mode = "test", rawBody = raw)
             val text = GeminiResponseParser.extractCandidateText(raw)
-            text.ifBlank { "連線成功 ($targetModel)" }
+            val suffix = apiThinkingLevel?.let { " [$targetModel / thinking=$it]" } ?: " [$targetModel]"
+            "${text.ifBlank { "連線成功" }}$suffix"
         }
     }
 
@@ -202,6 +270,8 @@ class GeminiService(
         supplementFileUri: String?,
         prompt: String,
         model: String,
+        thinkingLevel: GeminiThinkingLevel,
+        includeTranscript: Boolean,
         apiKey: String
     ): OncologySummaryResult {
         val primaryModel = model.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
@@ -211,47 +281,30 @@ class GeminiService(
             "gemini-3.5-flash-lite"
         ).distinct()
 
-        val payload = buildJsonObject {
-            put("contents", buildJsonArray {
-                add(buildJsonObject {
-                    put("parts", buildJsonArray {
-                        if (supplementFileUri != null) {
-                            add(buildJsonObject {
-                                put("text", "【音檔 1：原始通話錄音】")
-                            })
-                        }
-                        add(buildJsonObject {
-                            put("file_data", buildJsonObject {
-                                put("mime_type", mimeType)
-                                put("file_uri", fileUri)
-                            })
-                        })
-                        if (supplementFileUri != null) {
-                            add(buildJsonObject {
-                                put("text", "【音檔 2：個管師通話結束後的口述補充摘要（請作為最高優先權核對依據）】")
-                            })
-                            add(buildJsonObject {
-                                put("file_data", buildJsonObject {
-                                    put("mime_type", "audio/mp4")
-                                    put("file_uri", supplementFileUri)
-                                })
-                            })
-                        }
-                        add(buildJsonObject {
-                            put("text", prompt)
-                        })
-                    })
-                })
-            })
-            put("generationConfig", buildJsonObject {
-                put("responseMimeType", "application/json")
-                put("responseSchema", buildResponseSchema())
-            })
-        }
-        val payloadString = payload.toString()
+        val contentsArray = buildAudioContents(
+            fileUri = fileUri,
+            mimeType = mimeType,
+            supplementFileUri = supplementFileUri,
+            prompt = prompt
+        )
+        val responseSchema = buildResponseSchema(includeTranscript = includeTranscript)
 
         var lastError: IOException? = null
         for ((modelIdx, targetModel) in candidateModels.withIndex()) {
+            val apiThinkingLevel = thinkingLevel.resolveApiThinkingLevel(targetModel)
+            val payloadString = buildJsonObject {
+                put("contents", contentsArray)
+                put("generationConfig", buildJsonObject {
+                    put("responseMimeType", "application/json")
+                    put("responseSchema", responseSchema)
+                    if (apiThinkingLevel != null) {
+                        put("thinkingConfig", buildJsonObject {
+                            put("thinkingLevel", apiThinkingLevel)
+                        })
+                    }
+                })
+            }.toString()
+
             val attemptsForModel = if (modelIdx == 0) 2 else 1
             repeat(attemptsForModel) { attempt ->
                 val request = Request.Builder()
@@ -262,6 +315,12 @@ class GeminiService(
                 client.newCall(request).execute().use { response ->
                     val raw = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
+                        logUsageMetadata(
+                            model = targetModel,
+                            thinkingLevel = apiThinkingLevel,
+                            mode = if (includeTranscript) "summary+transcript" else "summary-only",
+                            rawBody = raw
+                        )
                         return GeminiResponseParser.parseSummaryResponse(raw)
                     }
                     val errMsg = extractApiError(raw)
@@ -277,12 +336,143 @@ class GeminiService(
                     }
                 }
             }
-            // Brief pause before trying the next fallback model
             if (modelIdx < candidateModels.lastIndex) {
                 delay(1000L)
             }
         }
         throw lastError ?: IOException("Gemini 摘要產生失敗（伺服器滿載 503），建議至設定頁改選 gemini-3.5-flash-lite 後再重試。")
+    }
+
+    private suspend fun generatePlainTranscript(
+        fileUri: String,
+        mimeType: String,
+        supplementFileUri: String?,
+        prompt: String,
+        model: String,
+        thinkingLevel: GeminiThinkingLevel,
+        apiKey: String
+    ): String {
+        val primaryModel = model.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
+        val candidateModels = listOf(
+            primaryModel,
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite"
+        ).distinct()
+
+        val contentsArray = buildAudioContents(
+            fileUri = fileUri,
+            mimeType = mimeType,
+            supplementFileUri = supplementFileUri,
+            prompt = prompt
+        )
+
+        var lastError: IOException? = null
+        for ((modelIdx, targetModel) in candidateModels.withIndex()) {
+            val apiThinkingLevel = thinkingLevel.resolveApiThinkingLevel(targetModel)
+            val payloadString = buildJsonObject {
+                put("contents", contentsArray)
+                if (apiThinkingLevel != null) {
+                    put("generationConfig", buildJsonObject {
+                        put("thinkingConfig", buildJsonObject {
+                            put("thinkingLevel", apiThinkingLevel)
+                        })
+                    })
+                }
+            }.toString()
+
+            val attemptsForModel = if (modelIdx == 0) 2 else 1
+            repeat(attemptsForModel) { attempt ->
+                val request = Request.Builder()
+                    .url("$BASE_URL/v1beta/models/$targetModel:generateContent?key=$apiKey")
+                    .post(payloadString.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    val raw = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        logUsageMetadata(
+                            model = targetModel,
+                            thinkingLevel = apiThinkingLevel,
+                            mode = "transcript-only",
+                            rawBody = raw
+                        )
+                        val text = GeminiResponseParser.extractCandidateText(raw)
+                        return GeminiResponseParser.stripCodeFence(text)
+                    }
+                    val errMsg = extractApiError(raw)
+                    lastError = IOException("Gemini ($targetModel) 錯誤 (${response.code}): $errMsg")
+
+                    val isRetryable = response.code == 503 || response.code == 429 || response.code == 500
+                    if (!isRetryable) {
+                        throw lastError!!
+                    }
+                    if (attempt < attemptsForModel - 1) {
+                        delay(3000L * (attempt + 1))
+                    }
+                }
+            }
+            if (modelIdx < candidateModels.lastIndex) {
+                delay(1000L)
+            }
+        }
+        throw lastError ?: IOException("Gemini 逐字稿產生失敗，請稍後重試。")
+    }
+
+    private fun buildAudioContents(
+        fileUri: String,
+        mimeType: String,
+        supplementFileUri: String?,
+        prompt: String
+    ): JsonArray = buildJsonArray {
+        add(buildJsonObject {
+            put("parts", buildJsonArray {
+                if (supplementFileUri != null) {
+                    add(buildJsonObject {
+                        put("text", "【音檔 1：原始通話錄音】")
+                    })
+                }
+                add(buildJsonObject {
+                    put("file_data", buildJsonObject {
+                        put("mime_type", mimeType)
+                        put("file_uri", fileUri)
+                    })
+                })
+                if (supplementFileUri != null) {
+                    add(buildJsonObject {
+                        put("text", "【音檔 2：個管師通話結束後的口述補充摘要（請作為最高優先權核對依據）】")
+                    })
+                    add(buildJsonObject {
+                        put("file_data", buildJsonObject {
+                            put("mime_type", "audio/mp4")
+                            put("file_uri", supplementFileUri)
+                        })
+                    })
+                }
+                add(buildJsonObject {
+                    put("text", prompt)
+                })
+            })
+        })
+    }
+
+    private fun logUsageMetadata(
+        model: String,
+        thinkingLevel: String?,
+        mode: String,
+        rawBody: String
+    ) {
+        runCatching {
+            val usage = json.parseToJsonElement(rawBody).jsonObject["usageMetadata"]?.jsonObject ?: return
+            val promptTokens = usage["promptTokenCount"]?.jsonPrimitive?.contentOrNull ?: "?"
+            val candidateTokens = usage["candidatesTokenCount"]?.jsonPrimitive?.contentOrNull ?: "?"
+            val thoughtTokens = usage["thoughtsTokenCount"]?.jsonPrimitive?.contentOrNull ?: "0"
+            val totalTokens = usage["totalTokenCount"]?.jsonPrimitive?.contentOrNull ?: "?"
+            Log.i(
+                TAG,
+                "Gemini usage [$mode] model=$model thinking=${thinkingLevel ?: "default"} " +
+                    "prompt=$promptTokens candidates=$candidateTokens thoughts=$thoughtTokens total=$totalTokens"
+            )
+        }
     }
 
     private fun deleteUploadedFile(fileName: String, apiKey: String) {
@@ -293,7 +483,7 @@ class GeminiService(
         client.newCall(request).execute().close()
     }
 
-    private fun buildResponseSchema(): JsonObject = buildJsonObject {
+    private fun buildResponseSchema(includeTranscript: Boolean): JsonObject = buildJsonObject {
         put("type", "OBJECT")
         put("properties", buildJsonObject {
             put("patientName", stringSchema("病人姓名，未提及請填「未提及」"))
@@ -309,22 +499,25 @@ class GeminiService(
                 put("items", buildJsonObject { put("type", "STRING") })
                 put("description", "後續待辦或追蹤事項清單")
             })
-            put("transcript", stringSchema("完整繁體中文逐字稿，標記說話者"))
+            if (includeTranscript) {
+                put("transcript", stringSchema("完整繁體中文逐字稿，標記說話者"))
+            }
         })
-        put("required", JsonArray(
-            listOf(
-                "patientName",
-                "patientIdentifier",
-                "identifierType",
-                "caseManagerName",
-                "callerRelation",
-                "inquiryCategory",
-                "urgencyLevel",
-                "summary",
-                "actionItems",
-                "transcript"
-            ).map { JsonPrimitive(it) }
-        ))
+        val requiredFields = buildList {
+            add("patientName")
+            add("patientIdentifier")
+            add("identifierType")
+            add("caseManagerName")
+            add("callerRelation")
+            add("inquiryCategory")
+            add("urgencyLevel")
+            add("summary")
+            add("actionItems")
+            if (includeTranscript) {
+                add("transcript")
+            }
+        }
+        put("required", JsonArray(requiredFields.map { JsonPrimitive(it) }))
     }
 
     private fun stringSchema(description: String): JsonObject = buildJsonObject {
@@ -340,6 +533,7 @@ class GeminiService(
     }
 
     companion object {
+        private const val TAG = "TumorRecorder_Gemini"
         private const val BASE_URL = "https://generativelanguage.googleapis.com"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
@@ -385,7 +579,7 @@ object GeminiResponseParser {
             // Fallback if model returned plain text instead of strict JSON
             OncologySummaryResult(
                 summary = cleanedJson,
-                transcript = cleanedJson
+                transcript = ""
             )
         }
     }

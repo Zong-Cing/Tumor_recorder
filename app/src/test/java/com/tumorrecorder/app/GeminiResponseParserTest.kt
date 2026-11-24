@@ -71,4 +71,29 @@ class GeminiResponseParserTest {
         assertEquals("病人本人", parsed.callerRelation)
         assertEquals("黃個管師", parsed.caseManagerName)
     }
+
+    @Test
+    fun parseSummaryResponse_handlesOmittedTranscriptField() {
+        val responseWithoutTranscript = """
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "{\"patientName\":\"張阿嬤\",\"patientIdentifier\":\"99887766\",\"identifierType\":\"病歷號碼\",\"caseManagerName\":\"林佩蓉（負責個管師本人）\",\"callerRelation\":\"家屬（兒子）\",\"inquiryCategory\":\"門診排程\",\"urgencyLevel\":\"一般\",\"summary\":\"【來電者身分】家屬（兒子） ｜【接聽角色】負責個管師本人\\n• 確認下週三門診時間\",\"actionItems\":[\"協助查詢抽血單\"]}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+        """.trimIndent()
+
+        val parsed = GeminiResponseParser.parseSummaryResponse(responseWithoutTranscript)
+        assertEquals("張阿嬤", parsed.patientName)
+        assertEquals("99887766", parsed.patientIdentifier)
+        assertEquals("", parsed.transcript)
+        assertEquals(1, parsed.actionItems.size)
+    }
 }

@@ -31,6 +31,55 @@ enum class RecordingAudioSource(
     }
 }
 
+enum class GeminiThinkingLevel(
+    val label: String,
+    val description: String
+) {
+    AUTO_LOWEST(
+        label = "自動最低（省費推薦）",
+        description = "依模型自動套用最低支援等級：Hydrogen／3.8-flash 用 low，Flash-Lite／3.6-flash 用 minimal，比預設 high 省約 60%～75% 費用"
+    ),
+    LOW(
+        label = "低 (low)",
+        description = "固定使用低思考深度，速度快且大幅節省輸出費用"
+    ),
+    MEDIUM(
+        label = "中 (medium)",
+        description = "中等思考深度，平衡臨床推理品質與費用"
+    ),
+    HIGH(
+        label = "高 (high)",
+        description = "最高思考深度，適合極複雜案例但費用較高"
+    );
+
+    /**
+     * Resolves a valid Gemini REST API `thinkingConfig.thinkingLevel` value for [modelId],
+     * returning null if the model does not support `thinkingLevel` (e.g., gemini-2.*).
+     * Never returns "MINIMAL" for models that only allow LOW/MEDIUM/HIGH (e.g., gemini-4-*, gemini-3.8-flash).
+     */
+    fun resolveApiThinkingLevel(modelId: String): String? {
+        val normalized = modelId.trim().lowercase()
+        if (normalized.startsWith("gemini-2.")) return null
+        return when (this) {
+            AUTO_LOWEST -> {
+                val supportsMinimal = normalized.contains("flash-lite") ||
+                    normalized.contains("3.6-flash") ||
+                    normalized.contains("3.5-flash") ||
+                    normalized.contains("3.0-flash")
+                if (supportsMinimal) "MINIMAL" else "LOW"
+            }
+            LOW -> "LOW"
+            MEDIUM -> "MEDIUM"
+            HIGH -> "HIGH"
+        }
+    }
+
+    companion object {
+        fun fromName(name: String?): GeminiThinkingLevel =
+            entries.firstOrNull { it.name == name } ?: AUTO_LOWEST
+    }
+}
+
 data class AppSettings(
     val onlyAnalyzeAppCalls: Boolean = true,
     val autoRecordCalls: Boolean = false,
@@ -42,6 +91,8 @@ data class AppSettings(
     val deleteAudioAfterEmailSent: Boolean = false,
     val geminiApiKey: String = "",
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
+    val geminiThinkingLevel: GeminiThinkingLevel = GeminiThinkingLevel.AUTO_LOWEST,
+    val generateTranscriptByDefault: Boolean = false,
     val customPromptAppendix: String = "",
     val smtpHost: String = DEFAULT_SMTP_HOST,
     val smtpPort: Int = DEFAULT_SMTP_PORT,

@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +42,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -145,10 +147,11 @@ class InCallActivity : ComponentActivity() {
                 if (confirmId != null && (callState == null || callState?.state == Call.STATE_DISCONNECTED)) {
                     PostCallAnalysisPromptScreen(
                         recordId = confirmId,
-                        onAnalyzeNow = { selectedPromptId ->
+                        onAnalyzeNow = { selectedPromptId, includeTranscript ->
                             container.callRecordRepository.enqueueProcessing(
                                 recordId = confirmId,
-                                promptTemplateId = selectedPromptId
+                                promptTemplateId = selectedPromptId,
+                                includeTranscript = includeTranscript
                             )
                             CallRecordingService.clearPendingConfirm()
                             openHomeAndFinish(openRecordId = confirmId)
@@ -693,13 +696,14 @@ private fun DtmfKeypad(entered: String, onDigit: (Char) -> Unit) {
 @Composable
 private fun PostCallAnalysisPromptScreen(
     recordId: Long,
-    onAnalyzeNow: (Long) -> Unit,
+    onAnalyzeNow: (Long, Boolean) -> Unit,
     onKeepForLater: () -> Unit,
     onDiscardRecording: () -> Unit
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as TumorRecorderApp
     val scope = rememberCoroutineScope()
+    val settings by app.container.settingsRepository.settings.collectAsStateWithLifecycle()
     val record by app.container.callRecordRepository
         .observeRecord(recordId)
         .collectAsStateWithLifecycle(initialValue = null)
@@ -708,6 +712,9 @@ private fun PostCallAnalysisPromptScreen(
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
     var selectedPromptId by remember { mutableStateOf<Long?>(null) }
+    var includeTranscript by remember(recordId, settings.generateTranscriptByDefault) {
+        mutableStateOf(settings.generateTranscriptByDefault)
+    }
     var isRecordingMemo by remember { mutableStateOf(false) }
 
     LaunchedEffect(templates) {
@@ -782,10 +789,34 @@ private fun PostCallAnalysisPromptScreen(
                     onSelect = { selectedPromptId = it }
                 )
 
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { includeTranscript = !includeTranscript }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = includeTranscript,
+                        onCheckedChange = { includeTranscript = it }
+                    )
+                    Column {
+                        Text(
+                            text = "同時產生完整逐字稿（選填）",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "預設關閉較省費，之後仍可於紀錄詳情頁隨時補產",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 Spacer(Modifier.height(4.dp))
 
                 Button(
-                    onClick = { onAnalyzeNow(selectedPromptId ?: -1L) },
+                    onClick = { onAnalyzeNow(selectedPromptId ?: -1L, includeTranscript) },
                     enabled = !isRecordingMemo,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = MedicalTeal)

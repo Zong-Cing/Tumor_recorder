@@ -36,7 +36,13 @@ class CallProcessingWorker(
         val recordId = inputData.getLong(KEY_RECORD_ID, -1L)
         val promptTemplateId = inputData.getLong(KEY_PROMPT_TEMPLATE_ID, -1L)
         val forceEmail = inputData.getBoolean(KEY_FORCE_EMAIL, false)
-        Log.i(TAG, "doWork start: recordId=$recordId promptTemplateId=$promptTemplateId forceEmail=$forceEmail")
+        val hasExplicitTranscriptFlag = inputData.keyValueMap.containsKey(KEY_INCLUDE_TRANSCRIPT)
+        val explicitIncludeTranscript = inputData.getBoolean(KEY_INCLUDE_TRANSCRIPT, false)
+        Log.i(
+            TAG,
+            "doWork start: recordId=$recordId promptTemplateId=$promptTemplateId forceEmail=$forceEmail " +
+                "includeTranscriptOverride=${if (hasExplicitTranscriptFlag) explicitIncludeTranscript else "default"}"
+        )
 
         if (recordId <= 0L) {
             Log.e(TAG, "Invalid recordId=$recordId")
@@ -50,6 +56,11 @@ class CallProcessingWorker(
         val settings = app.container.settingsRepository.currentSettings()
         val geminiService = app.container.geminiService
         val emailService = app.container.emailService
+        val includeTranscript = if (hasExplicitTranscriptFlag) {
+            explicitIncludeTranscript
+        } else {
+            settings.generateTranscriptByDefault
+        }
 
         val record = repo.getRecord(recordId)
         if (record == null) {
@@ -63,6 +74,7 @@ class CallProcessingWorker(
                 recordId = recordId,
                 promptTemplateId = promptTemplateId,
                 forceEmail = forceEmail,
+                includeTranscript = includeTranscript,
                 initialRecord = record,
                 repo = repo,
                 promptRepo = promptRepo,
@@ -93,6 +105,7 @@ class CallProcessingWorker(
         recordId: Long,
         promptTemplateId: Long,
         forceEmail: Boolean,
+        includeTranscript: Boolean,
         initialRecord: CallRecordEntity,
         repo: com.tumorrecorder.app.data.repository.CallRecordRepository,
         promptRepo: com.tumorrecorder.app.data.repository.PromptTemplateRepository,
@@ -122,7 +135,8 @@ class CallProcessingWorker(
             ?.takeIf { it.exists() && it.length() > 0L }
         Log.i(
             TAG,
-            "Loaded recordId=$recordId model=${settings.geminiModel} audio=${audioFile.absolutePath} " +
+            "Loaded recordId=$recordId model=${settings.geminiModel} thinking=${settings.geminiThinkingLevel} " +
+                "includeTranscript=$includeTranscript audio=${audioFile.absolutePath} " +
                 "bytes=$audioLength hasSupplement=${supplementFile != null} supplementBytes=${supplementFile?.length() ?: 0L}"
         )
         if (!audioFile.exists() || audioLength == 0L) {
@@ -143,7 +157,7 @@ class CallProcessingWorker(
             promptRepo.getDefaultOrFirst()
         }
 
-        // Step 1: Transcribe & Summarize via Gemini
+        // Step 1: Summarize (and optionally transcribe) via Gemini
         record = record.copy(
             status = ProcessingStatus.TRANSCRIBING.name,
             promptTemplateName = chosenTemplate.name,
@@ -161,7 +175,8 @@ class CallProcessingWorker(
                 callTimeDisplay = callTimeDisplay,
                 settings = settings,
                 promptTemplate = chosenTemplate,
-                supplementAudioFile = supplementFile
+                supplementAudioFile = supplementFile,
+                includeTranscript = includeTranscript
             )
         } catch (e: Exception) {
             Log.e(TAG, "AI processing failed for record $recordId: ${e.message}", e)
@@ -175,10 +190,11 @@ class CallProcessingWorker(
             return Result.failure()
         }
 
-        // Step 2: Persist extracted oncology case manager details (preserving in-call quick notes if AI returned 未提及)
+        // Step 2: Persist extracted oncology case manager details (preserving in-call quick notes & any existing transcript)
         val mergedPatientName = mergeField(summaryResult.patientName, record.patientName)
         val mergedIdentifier = mergeField(summaryResult.patientIdentifier, record.patientIdentifier)
         val mergedCaseManager = mergeField(summaryResult.caseManagerName, record.caseManagerName)
+        val mergedTranscript = summaryResult.transcript.trim().ifBlank { record.transcript }
 
         record = record.copy(
             patientName = mergedPatientName,
@@ -190,7 +206,7 @@ class CallProcessingWorker(
             urgencyLevel = summaryResult.urgencyLevel.ifBlank { "一般" },
             summary = summaryResult.summary,
             actionItemsText = summaryResult.actionItems.joinToString("\n"),
-            transcript = summaryResult.transcript,
+            transcript = mergedTranscript,
             promptTemplateName = chosenTemplate.name,
             errorMessage = null
         )
@@ -199,10 +215,11 @@ class CallProcessingWorker(
         if (!shouldEmail) {
             val saved = record.copy(status = ProcessingStatus.COMPLETED_NO_EMAIL.name)
             repo.updateRecord(saved)
+            val contentDesc = if (saved.transcript.isBlank()) "摘要已儲存（精簡模式，可於詳情頁隨時補產逐字稿）" else "摘要與逐字稿已儲存"
             notifyUser(
                 recordId,
                 "通話摘要已完成：${saved.patientName}",
-                if (!settings.isEmailConfigured) "摘要與逐字稿已儲存（尚未設定 Gmail SMTP）" else "摘要與逐字稿已儲存"
+                if (!settings.isEmailConfigured) "$contentDesc（尚未設定 Gmail SMTP）" else contentDesc
             )
             return Result.success()
         }
@@ -304,5 +321,6 @@ class CallProcessingWorker(
         const val KEY_RECORD_ID = "record_id"
         const val KEY_PROMPT_TEMPLATE_ID = "prompt_template_id"
         const val KEY_FORCE_EMAIL = "force_email"
+        const val KEY_INCLUDE_TRANSCRIPT = "include_transcript"
     }
 }

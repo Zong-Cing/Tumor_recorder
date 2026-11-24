@@ -118,21 +118,25 @@ class CallRecordRepository(
     fun enqueueProcessing(
         recordId: Long,
         promptTemplateId: Long = -1L,
-        forceSendEmail: Boolean = false
+        forceSendEmail: Boolean = false,
+        includeTranscript: Boolean? = null
     ) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        val pairs = buildList<Pair<String, Any?>> {
+            add(CallProcessingWorker.KEY_RECORD_ID to recordId)
+            add(CallProcessingWorker.KEY_PROMPT_TEMPLATE_ID to promptTemplateId)
+            add(CallProcessingWorker.KEY_FORCE_EMAIL to forceSendEmail)
+            if (includeTranscript != null) {
+                add(CallProcessingWorker.KEY_INCLUDE_TRANSCRIPT to includeTranscript)
+            }
+        }.toTypedArray()
+
         val request = OneTimeWorkRequestBuilder<CallProcessingWorker>()
             .setConstraints(constraints)
-            .setInputData(
-                workDataOf(
-                    CallProcessingWorker.KEY_RECORD_ID to recordId,
-                    CallProcessingWorker.KEY_PROMPT_TEMPLATE_ID to promptTemplateId,
-                    CallProcessingWorker.KEY_FORCE_EMAIL to forceSendEmail
-                )
-            )
+            .setInputData(workDataOf(*pairs))
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(

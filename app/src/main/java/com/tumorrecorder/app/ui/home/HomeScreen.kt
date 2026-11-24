@@ -58,6 +58,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
@@ -431,6 +432,9 @@ fun HomeScreen(
                 (promptTemplates.firstOrNull { it.isDefault } ?: promptTemplates.firstOrNull())?.id
             )
         }
+        var includeTranscript by remember(confirmRecord.id, settings.generateTranscriptByDefault) {
+            mutableStateOf(settings.generateTranscriptByDefault)
+        }
         AlertDialog(
             onDismissRequest = { viewModel.dismissConfirmKeepRecord() },
             title = { Text("通話已結束，選擇分析 Prompt") },
@@ -451,6 +455,22 @@ fun HomeScreen(
                         selectedTemplateId = selectedPromptId,
                         onSelect = { selectedPromptId = it }
                     )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { includeTranscript = !includeTranscript }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = includeTranscript,
+                            onCheckedChange = { includeTranscript = it }
+                        )
+                        Text(
+                            text = "同時產生完整逐字稿（選填）",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -481,7 +501,8 @@ fun HomeScreen(
                     onClick = {
                         viewModel.confirmAnalyzeNow(
                             recordId = confirmRecord.id,
-                            promptTemplateId = selectedPromptId ?: -1L
+                            promptTemplateId = selectedPromptId ?: -1L,
+                            includeTranscript = includeTranscript
                         )
                     }
                 ) {

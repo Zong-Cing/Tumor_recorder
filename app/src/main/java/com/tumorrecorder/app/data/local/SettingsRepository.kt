@@ -45,6 +45,10 @@ class SettingsRepository(context: Context) {
             geminiModel = prefs.getString(KEY_GEMINI_MODEL, AppSettings.DEFAULT_GEMINI_MODEL)
                 ?.ifBlank { AppSettings.DEFAULT_GEMINI_MODEL }
                 ?: AppSettings.DEFAULT_GEMINI_MODEL,
+            geminiThinkingLevel = com.tumorrecorder.app.domain.model.GeminiThinkingLevel.fromName(
+                prefs.getString(KEY_GEMINI_THINKING_LEVEL, null)
+            ),
+            generateTranscriptByDefault = prefs.getBoolean(KEY_GENERATE_TRANSCRIPT_DEFAULT, false),
             customPromptAppendix = prefs.getString(KEY_CUSTOM_PROMPT, "") ?: "",
             smtpHost = prefs.getString(KEY_SMTP_HOST, AppSettings.DEFAULT_SMTP_HOST)
                 ?.ifBlank { AppSettings.DEFAULT_SMTP_HOST }
@@ -71,6 +75,8 @@ class SettingsRepository(context: Context) {
             .putBoolean(KEY_DELETE_AUDIO_AFTER_EMAIL, s.deleteAudioAfterEmailSent)
             .putString(KEY_GEMINI_API_KEY, s.geminiApiKey.trim())
             .putString(KEY_GEMINI_MODEL, s.geminiModel.trim().ifBlank { AppSettings.DEFAULT_GEMINI_MODEL })
+            .putString(KEY_GEMINI_THINKING_LEVEL, s.geminiThinkingLevel.name)
+            .putBoolean(KEY_GENERATE_TRANSCRIPT_DEFAULT, s.generateTranscriptByDefault)
             .putString(KEY_CUSTOM_PROMPT, s.customPromptAppendix)
             .putString(KEY_SMTP_HOST, s.smtpHost.trim().ifBlank { AppSettings.DEFAULT_SMTP_HOST })
             .putInt(KEY_SMTP_PORT, s.smtpPort)
@@ -113,6 +119,8 @@ class SettingsRepository(context: Context) {
         private const val KEY_DELETE_AUDIO_AFTER_EMAIL = "delete_audio_after_email"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
         private const val KEY_GEMINI_MODEL = "gemini_model"
+        private const val KEY_GEMINI_THINKING_LEVEL = "gemini_thinking_level"
+        private const val KEY_GENERATE_TRANSCRIPT_DEFAULT = "generate_transcript_default"
         private const val KEY_CUSTOM_PROMPT = "custom_prompt_appendix"
         private const val KEY_SMTP_HOST = "smtp_host"
         private const val KEY_SMTP_PORT = "smtp_port"

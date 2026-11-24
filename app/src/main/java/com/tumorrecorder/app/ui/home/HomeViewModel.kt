@@ -158,13 +158,18 @@ class HomeViewModel(
         }
     }
 
-    fun confirmAnalyzeNow(recordId: Long, promptTemplateId: Long) {
+    fun confirmAnalyzeNow(
+        recordId: Long,
+        promptTemplateId: Long,
+        includeTranscript: Boolean? = null
+    ) {
         CallRecordingService.clearPendingConfirm()
         container.callRecordRepository.enqueueProcessing(
             recordId = recordId,
-            promptTemplateId = promptTemplateId
+            promptTemplateId = promptTemplateId,
+            includeTranscript = includeTranscript
         )
-        _snackbarMessage.value = "已開始 Gemini AI 轉錄摘要，完成後將依設定自動寄信"
+        _snackbarMessage.value = "已開始 Gemini AI 摘要分析，完成後將依設定自動寄信"
     }
 
     fun dismissConfirmKeepRecord() {
